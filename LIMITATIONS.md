@@ -41,6 +41,17 @@ Fuente única de lo que Andén no demuestra. Ningún otro archivo los repite.
 - Las reglas se evalúan en el orden del perfil y gana la primera que coincide. libseccomp ordena por su cuenta, así que un perfil con dos reglas distintas para la misma syscall puede comportarse distinto que en runc o crun.
 - Con `process.noNewPrivileges` en `false`, el filtro se instala antes de soltar capacidades, porque sin `no_new_privs` el kernel exige `CAP_SYS_ADMIN`; runc hace lo mismo. Por eso el filtro ya rige sobre `setgroups`, `setresuid`, `capset` y `prctl` del propio runtime: un perfil que las bloquee hace fallar el arranque. Solo con `noNewPrivileges` en `true` se instala justo antes de `exec`.
 
+## Imágenes
+
+- Solo se admiten sha256 y capas `tar` o `tar+gzip`: una capa zstd o un manifiesto de Docker sin convertir se rechazan al importar.
+- Los dispositivos de una capa se vuelven archivos vacíos con el modo de la entrada, igual que `umoci --rootless` 0.6.0; un contenedor los recibe como montajes bind del runtime, no de la imagen.
+- No se aplican dueños, tiempos ni atributos extendidos de la capa. Una capacidad de archivo guardada en `security.capability` se pierde.
+- Una entrada cuyo camino pasa por un symlink de la misma capa se rechaza aunque el destino quede dentro: seguirlo bien exigiría ver las capas inferiores.
+- Un directorio padre que la capa no declara se crea con 0755 y, en el overlay, tapa el modo que tenía en la capa inferior. umoci conserva el de abajo. Las capas que escriben los constructores de imágenes declaran sus padres.
+- Una entrada que cuelga de un whiteout de la misma capa (`.wh.d` seguido de `d/x` sin `d/`) falla al extraer.
+- `anden image import` no vuelve a leer un blob que el almacén ya tiene: la copia guardada solo se revisa al extraerla o con `anden image verify`.
+- Fuera del namespace del datacenter, `anden image mount` se reejecuta en un namespace de montaje propio y el montaje desaparece cuando el comando termina. Solo es útil dentro de un namespace que ya sea root, donde no hay reejecución.
+
 ## Mediciones
 
 - Toda cifra vale para esta máquina (Ryzen 5 5600G, 14 GiB visibles, btrfs, gobernador `powersave`). No se compara con la de Railway como «más rápido»: la suya es de otra plataforma y de 2023.
@@ -50,3 +61,4 @@ Fuente única de lo que Andén no demuestra. Ningún otro archivo los repite.
 Todo el producto. Esta sección se reduce conforme cada K cierre.
 
 - `anden-runtime` está escrito (k1-02) y su generador de BPF para seccomp también (k1-03), pero no se han ejecutado en esta máquina: ni su conformidad OCI ni su aislamiento están medidos hasta que corran C3 y C6. Las pruebas de Go del generador interpretan el programa con un intérprete propio, no con el kernel.
+- El almacén de imágenes y `anden image` están escritos (k1-04), pero no se han compilado ni ejecutado: la igualdad con umoci, la integridad y la deduplicación no están medidas hasta que corran C20, C21 y C22. Lo único medido es el comportamiento de `umoci --rootless` que está en `vault/RESEARCH.md`.

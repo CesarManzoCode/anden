@@ -10,6 +10,8 @@
 - `anden-runtime`, runtime OCI con `create`, `start`, `state`, `kill` y `delete` según la interfaz de línea de comandos de runtime-tools: namespaces nuevos o por ruta, rootfs con `pivot_root`, montajes, dispositivos, capacidades, rlimits, usuario, sysctl, `oomScoreAdj`, `noNewPrivileges`, rutas enmascaradas y de solo lectura, propagación del rootfs y límites de cgroups v2 (`memory.max`, `cpu.max`, `pids.max`). El estado vive en `$XDG_RUNTIME_DIR/anden-runtime/<id>/`, o en `/run/user/<uid>/anden-runtime/<id>/`, o bajo `--root`.
 - `anden-runtime` aplica `linux.seccomp`: compila el perfil a BPF sin bibliotecas externas (acciones `SCMP_ACT_ALLOW`, `SCMP_ACT_ERRNO` y `SCMP_ACT_KILL`, comparación de argumentos, `errnoRet`) y lo instala justo antes de ejecutar el proceso del contenedor.
 - Criterios de aceptación C3 (subconjunto OCI de runtime-tools, declarado en `acceptance/oci_subset.txt`) y C6 (aislamiento comparado con runc).
+- `anden image import`, `unpack`, `mount` y `verify`: almacén de imágenes OCI por contenido, con sha256 verificado al importar, al transferir y al extraer, capas deduplicadas y extraídas una sola vez, y rootfs montado con overlay `userxattr`.
+- Criterios de aceptación C20 (rootfs comparado con umoci), C21 (integridad) y C22 (deduplicación).
 
 ### Decisiones
 

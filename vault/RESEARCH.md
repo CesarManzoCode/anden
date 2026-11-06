@@ -85,6 +85,15 @@ Fuentes primarias con su revisión fijada, consultadas el 6 nov 2026. Una págin
 | [runtime-spec, `config-linux.md`](https://github.com/opencontainers/runtime-spec/blob/469dd5b6233c9d0137d16be792978aebb302666e/config-linux.md#seccomp) | `469dd5b6233c9d0137d16be792978aebb302666e` | Campos `defaultAction`, `defaultErrnoRet`, `architectures`, `flags`, `listenerPath`, `syscalls[].names`, `action`, `errnoRet` (por defecto `EPERM`; con una acción sin errno el runtime debe fallar), `args[].index`, `value`, `valueTwo`, `op` |
 | `runc --help`, `runc create --help`, `runc delete --help` | `/usr/bin/runc` 1.5.2, libseccomp 2.6.0 | `--root DIR` global, `create --bundle B ID`, `start ID`, `state ID`, `delete --force ID`; `--rootless` es `auto` por defecto |
 
+## Almacén de imágenes (consultado el 6 nov 2026 para k1-04)
+
+| Fuente | Revisión | Dato usado |
+|---|---|---|
+| `umoci unpack --rootless`, ejecutado con una imagen de dos capas hecha a mano | `/usr/bin/umoci` 0.6.0 | Un char o block device queda como archivo regular vacío con el modo de la entrada (666 y 640) y un aviso `rootless{...} creating empty file in place of device`: no se omite la ruta. Un archivo con `.wh.` del mismo nombre en su misma capa sigue visible. Un directorio con `.wh.` en su misma capa conserva lo de esa capa y oculta lo de abajo. Conserva los modos 4755 y 000 |
+| [umoci, `oci/layer/tar_extract.go`](https://github.com/opencontainers/umoci/blob/v0.6.0/oci/layer/tar_extract.go) | tag `v0.6.0` | La rama `tar.TypeChar, tar.TypeBlock` con `te.partialRootless` crea el archivo vacío; `partialRootless` vale `Rootless \|\| inUserNamespace` |
+| [image-spec, `layer.md`](https://github.com/opencontainers/image-spec/blob/v1.1.1/layer.md) | tag `v1.1.1` | «Whiteout files MUST only apply to resources in lower/parent layers»; lo que está en la misma capa solo lo ocultan whiteouts de capas posteriores |
+| Go, `src/archive/tar/reader.go`, `src/internal/godebugs/table.go` | go1.27.3 instalado | `Reader.Next` solo devuelve `ErrInsecurePath` con `GODEBUG=tarinsecurepath=0`; por defecto entrega el nombre tal cual y validarlo le toca a quien extrae. No valida destinos de enlaces |
+
 ## Documentación oficial sin revisión fija (consultada el 6 nov 2026)
 
 | Fuente | Dato |
