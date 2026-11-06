@@ -63,6 +63,17 @@ Fuentes primarias con su revisión fijada, consultadas el 6 nov 2026. Una págin
 | [actions/checkout](https://github.com/actions/checkout) | `v7.0.1`, `3d3c42e5aac5ba805825da76410c181273ba90b1` | CI |
 | [actions/setup-go](https://github.com/actions/setup-go) | `v7.0.0`, `b7ad1dad31e06c5925ef5d2fc7ad053ef454303e`; entrada `go-version` | CI |
 
+## Runtime OCI (consultado el 6 nov 2026 para k1-02)
+
+| Fuente | Revisión | Dato usado |
+|---|---|---|
+| runtime-tools, `validation/util/container.go` | `bd3b0bd00f44e15f0f1ff4130c61dbea1b1c56cc` | La suite invoca `create --pid-file P --bundle B ID`, `start ID`, `state ID`, `kill ID SEÑAL` (la señal va posicional; `--signal` está comentado porque runc no lo admite) y `delete [--force] ID`. El stdout y stderr del contenedor son los de `create`, redirigidos a archivos del bundle. `Clean()` hace `delete --force` sobre contenedores creados o detenidos |
+| runtime-tools, `generate/generate.go` y `validation/*/` | misma | La configuración por defecto trae `linux.resources.devices` con una sola regla que niega todo, namespaces pid, network, ipc, uts y mount, y el perfil seccomp por defecto. `linux_ns_nopath` crea los siete namespaces con `uidMappings` y `gidMappings` (hostID 1000, containerID 0, tamaño 1000), aunque D09 excluya `linux_uid_mappings`. `linux_ns_path` une ipc, mnt, net, pid (vía `pid_for_children`) y uts; `linux_ns_path_type` espera error cuando la ruta es de otro tipo, también para `user`. `start` con `process` ausente debe terminar sin error y dejar el contenedor detenido |
+| [runtime-spec, `specs-go/config.go` y `state.go`](https://github.com/opencontainers/runtime-spec/blob/469dd5b6233c9d0137d16be792978aebb302666e/specs-go/config.go) | `469dd5b6233c9d0137d16be792978aebb302666e` | Nombres JSON de todos los campos, que el parseo estricto declara; `state` con `ociVersion`, `id`, `status`, `pid`, `bundle`, `annotations` |
+| [setns(2), man7.org](https://man7.org/linux/man-pages/man2/setns.2.html) | consulta del 6 nov 2026 | No se entra a un namespace de montaje compartiendo atributos de `CLONE_FS`; un proceso multihilo no cambia de namespace de usuario ni de tiempo; `setns` de PID solo afecta a los hijos; tipo distinto de `nstype` da `EINVAL` |
+| `/usr/include/linux/nsfs.h` y `/usr/include/asm/unistd_64.h` | sistema | `NS_GET_NSTYPE = _IO(0xb7, 0x3)`; `__NR_setns 308` en x86-64 |
+| Go, `src/syscall/exec_linux.go`, `exec_unix.go`, `rlimit.go`; `src/os/exec_posix.go` | go1.27.3 instalado | `SysProcAttr` tiene `Cloneflags`, `UidMappings`, `GidMappingsEnableSetgroups`, `AmbientCaps` y `UseCgroupFD`/`CgroupFD` (este último fuerza `clone3` con `CLONE_INTO_CGROUP`); el hijo se clona desde el hilo que llama; `syscall.Exec` restaura el `RLIMIT_NOFILE` guardado al arrancar salvo que antes se llame `syscall.Setrlimit`; `os.StartProcess` llama `Fd()` sobre cada archivo heredado, lo que lo deja bloqueante. `syscall` no define `SYS_SETNS` |
+
 ## Documentación oficial sin revisión fija (consultada el 6 nov 2026)
 
 | Fuente | Dato |
