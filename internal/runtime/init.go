@@ -156,11 +156,22 @@ func execProcess(c *initConfig) error {
 		umask = int(*p.User.Umask)
 	}
 	syscall.Umask(umask)
+	// The kernel installs a filter only with no_new_privs or with
+	// CAP_SYS_ADMIN. With noNewPrivileges false the filter goes in while
+	// init still holds every capability, as runc does; otherwise right
+	// before exec, after applyUser sets PR_SET_NO_NEW_PRIVS.
+	if !p.NoNewPrivileges {
+		if err := applySeccomp(c.Spec.Linux.Seccomp); err != nil {
+			return err
+		}
+	}
 	if err := applyUser(p, c.CapLast); err != nil {
 		return err
 	}
-	if err := applySeccomp(c.Spec.Linux.Seccomp); err != nil {
-		return err
+	if p.NoNewPrivileges {
+		if err := applySeccomp(c.Spec.Linux.Seccomp); err != nil {
+			return err
+		}
 	}
 	if err := syscall.Exec(path, p.Args, p.Env); err != nil {
 		return fmt.Errorf("exec %s: %w", path, err)

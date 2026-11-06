@@ -36,6 +36,10 @@ Fuente única de lo que Andén no demuestra. Ningún otro archivo los repite.
 - No une namespaces de usuario ni de tiempo por ruta ni crea namespaces de tiempo: un proceso Go es multihilo y `setns(2)` no admite esos cambios en un proceso multihilo.
 - `linux.resources.devices` solo acepta la regla que lo niega todo, y no la aplica con cgroups (eso exige eBPF): el contenedor solo alcanza los nodos que el runtime monta. Sin root no hay `mknod`, así que los dispositivos son montajes bind de los nodos del host.
 - Si el namespace de red no pertenece al namespace de usuario actual, `/sys` es un bind de solo lectura del `/sys` visible y no un sysfs propio.
+- `linux.seccomp` solo admite las acciones `SCMP_ACT_ALLOW`, `SCMP_ACT_ERRNO` y `SCMP_ACT_KILL` (que mata el hilo), los operadores `SCMP_CMP_*` sobre argumentos y las banderas `SECCOMP_FILTER_FLAG_TSYNC`, `LOG` y `SPEC_ALLOW`. `create` rechaza cualquier otra acción, `listenerPath` y una lista `architectures` sin `SCMP_ARCH_X86_64`.
+- El filtro solo cubre llamadas nativas de x86-64. Una llamada de otra arquitectura (i386) o x32 mata el proceso aunque `architectures` la liste, y un nombre que la tabla de x86-64 no conoce se ignora sin error, como hacen los runtimes basados en libseccomp con nombres de otras arquitecturas.
+- Las reglas se evalúan en el orden del perfil y gana la primera que coincide. libseccomp ordena por su cuenta, así que un perfil con dos reglas distintas para la misma syscall puede comportarse distinto que en runc o crun.
+- Con `process.noNewPrivileges` en `false`, el filtro se instala antes de soltar capacidades, porque sin `no_new_privs` el kernel exige `CAP_SYS_ADMIN`; runc hace lo mismo. Por eso el filtro ya rige sobre `setgroups`, `setresuid`, `capset` y `prctl` del propio runtime: un perfil que las bloquee hace fallar el arranque. Solo con `noNewPrivileges` en `true` se instala justo antes de `exec`.
 
 ## Mediciones
 
@@ -45,5 +49,4 @@ Fuente única de lo que Andén no demuestra. Ningún otro archivo los repite.
 
 Todo el producto. Esta sección se reduce conforme cada K cierre.
 
-- `anden-runtime` está escrito (k1-02) pero no se ha ejecutado en esta máquina: ni su conformidad OCI ni su aislamiento están medidos hasta que corran C3 y C6.
-- Mientras no exista el generador de BPF, un `config.json` con `linux.seccomp` falla en `create`, y eso incluye la configuración por defecto de runtime-tools.
+- `anden-runtime` está escrito (k1-02) y su generador de BPF para seccomp también (k1-03), pero no se han ejecutado en esta máquina: ni su conformidad OCI ni su aislamiento están medidos hasta que corran C3 y C6. Las pruebas de Go del generador interpretan el programa con un intérprete propio, no con el kernel.

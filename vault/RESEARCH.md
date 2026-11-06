@@ -74,6 +74,17 @@ Fuentes primarias con su revisión fijada, consultadas el 6 nov 2026. Una págin
 | `/usr/include/linux/nsfs.h` y `/usr/include/asm/unistd_64.h` | sistema | `NS_GET_NSTYPE = _IO(0xb7, 0x3)`; `__NR_setns 308` en x86-64 |
 | Go, `src/syscall/exec_linux.go`, `exec_unix.go`, `rlimit.go`; `src/os/exec_posix.go` | go1.27.3 instalado | `SysProcAttr` tiene `Cloneflags`, `UidMappings`, `GidMappingsEnableSetgroups`, `AmbientCaps` y `UseCgroupFD`/`CgroupFD` (este último fuerza `clone3` con `CLONE_INTO_CGROUP`); el hijo se clona desde el hilo que llama; `syscall.Exec` restaura el `RLIMIT_NOFILE` guardado al arrancar salvo que antes se llame `syscall.Setrlimit`; `os.StartProcess` llama `Fd()` sobre cada archivo heredado, lo que lo deja bloqueante. `syscall` no define `SYS_SETNS` |
 
+## Seccomp (consultado el 6 nov 2026 para k1-03)
+
+| Fuente | Revisión | Dato usado |
+|---|---|---|
+| `/usr/include/linux/seccomp.h`, `filter.h`, `bpf_common.h`, `audit.h`, `elf-em.h` | sistema, kernel 7.2.14 | `SECCOMP_SET_MODE_FILTER 1`; banderas `TSYNC 1`, `LOG 2`, `SPEC_ALLOW 4`; retornos `KILL_PROCESS 0x80000000`, `KILL_THREAD 0` (= `SECCOMP_RET_KILL`), `ERRNO 0x00050000`, `ALLOW 0x7fff0000`, `DATA 0xffff`; `struct seccomp_data` es `int nr`, `u32 arch`, `u64 instruction_pointer`, `u64 args[6]`; `struct sock_filter` es `u16 code, u8 jt, u8 jf, u32 k`; `BPF_MAXINSNS 4096`; opcodes `BPF_LD 0x00`, `BPF_ALU 0x04`, `BPF_JMP 0x05`, `BPF_RET 0x06`, `BPF_W 0`, `BPF_ABS 0x20`, `BPF_K 0`, `BPF_AND 0x50`, `BPF_JEQ 0x10`, `BPF_JGT 0x20`, `BPF_JGE 0x30`; `AUDIT_ARCH_X86_64 = EM_X86_64(62) \| 0x80000000 \| 0x40000000` |
+| `/usr/include/asm/unistd_64.h` y `asm/unistd.h` | sistema | Tabla de 386 syscalls de x86-64 copiada a `internal/runtime/sysnum_linux_amd64.go`; `__NR_seccomp 317`, `__NR_mount 165`, `__NR_swapon 167`; `__X32_SYSCALL_BIT 0x40000000` |
+| runtime-tools, `generate/seccomp/seccomp_default.go`, `parse_action.go`, `syscall_compare.go`, `validation/linux_seccomp/linux_seccomp.go` | `bd3b0bd00f44e15f0f1ff4130c61dbea1b1c56cc` | El perfil por defecto usa `SCMP_ACT_ERRNO` por defecto, arquitecturas `X86_64`, `X86`, `X32`, una lista de `SCMP_ACT_ALLOW` con nombres de varias arquitecturas, `personality` con `SCMP_CMP_EQ` y, sin `CAP_SYS_ADMIN`, `clone` con `SCMP_CMP_MASKED_EQ` (`value` es la máscara, `valueTwo` el dato). `linux_seccomp` pone `allow` por defecto, lo que borra las reglas `allow`, y agrega `getcwd` con `errno` |
+| runtime-tools, `cmd/runtimetest/main.go` | misma | Comprueba que `prctl(PR_GET_NO_NEW_PRIVS)` coincida con `process.noNewPrivileges`, así que el runtime no puede activar `no_new_privs` por su cuenta para instalar el filtro |
+| [runtime-spec, `config-linux.md`](https://github.com/opencontainers/runtime-spec/blob/469dd5b6233c9d0137d16be792978aebb302666e/config-linux.md#seccomp) | `469dd5b6233c9d0137d16be792978aebb302666e` | Campos `defaultAction`, `defaultErrnoRet`, `architectures`, `flags`, `listenerPath`, `syscalls[].names`, `action`, `errnoRet` (por defecto `EPERM`; con una acción sin errno el runtime debe fallar), `args[].index`, `value`, `valueTwo`, `op` |
+| `runc --help`, `runc create --help`, `runc delete --help` | `/usr/bin/runc` 1.5.2, libseccomp 2.6.0 | `--root DIR` global, `create --bundle B ID`, `start ID`, `state ID`, `delete --force ID`; `--rootless` es `auto` por defecto |
+
 ## Documentación oficial sin revisión fija (consultada el 6 nov 2026)
 
 | Fuente | Dato |
