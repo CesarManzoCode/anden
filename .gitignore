@@ -5,3 +5,4 @@
 /.run/
 /.cache/
 /bin/
+__pycache__/

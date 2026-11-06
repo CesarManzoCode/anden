@@ -26,6 +26,7 @@ Fuente única de lo que Andén no demuestra. Ningún otro archivo los repite.
 - Las capas extraídas sin root no preservan dueños reales con la misma fidelidad, y por eso C20 no compara dueños.
 - El listado de nftables de C27 solo ve lo que hay dentro del namespace. Las reglas del host no se pueden leer sin root; Andén tampoco puede escribirlas.
 - La medición en caché fría de C8 necesita `sudo` y se omite con código 77 si falta.
+- En C6, `swapon` no distingue si actuó el filtro seccomp: medido con `unshare -U --map-root-user` y sin filtro, ya da `EPERM`. Quien lo distingue es `mount`, que sin filtro da `ENOENT` sobre la ruta inexistente que usa `probe`.
 
 ## Conformidad OCI
 
