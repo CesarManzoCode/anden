@@ -4,6 +4,8 @@
 The config.json is the same for both: own pid, network, UTS, IPC and mount namespaces, no uidMappings, and a
 seccomp filter that blocks mount and swapon. Each runtime runs under the D09 namespace prefix with the
 container's stdout redirected to a file. runc follows D20: create, then start without waiting for it to return.
+NOTIFY_SOCKET is removed from the runtimes' environment: runc would add a mount and an env var to the container and
+bind a socket under its --root, and that path does not fit in sun_path here, so `runc start` fails.
 """
 import argparse
 import json
@@ -104,6 +106,7 @@ def run_one(name, cmd, bundle, out_path, log):
 
 def inner(work):
     """Runs inside the namespace prefix: a sleep is the host process the container must not see."""
+    os.environ.pop("NOTIFY_SOCKET", None)
     host = subprocess.Popen(["sleep", "600"], stdin=subprocess.DEVNULL)
     errors = {}
     try:

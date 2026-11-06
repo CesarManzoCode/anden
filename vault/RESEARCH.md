@@ -26,7 +26,7 @@ Fuentes primarias con su revisión fijada, consultadas el 6 nov 2026. Una págin
 | Valkey | 9.1.2 (paquete Arch) | `valkey-server --port --save ''`; `redis-cli` es enlace a `valkey-cli`, `SET` y `GET` responden |
 | BIND `dig` | 9.20.30 (paquete Arch) | `dig @servidor nombre +short` según su ayuda |
 | crun | 1.29.1 (`~/.local/bin`) | Suite runtime-tools y bundle con seccomp. El contrato usa `/usr/bin/crun`, versión de Arch 1.30.1 |
-| runc | 1.5.1 (`~/.local/bin`) | `create` funciona; `start` y `run -d` no regresan. El contrato usa `/usr/bin/runc`, versión de Arch 1.5.2 |
+| runc | 1.5.1 (`~/.local/bin`) | `create` funciona; `start` y `run -d` no regresan. El contrato usa `/usr/bin/runc`, versión de Arch 1.5.2. Medido con 1.5.2 el 6 nov 2026: con `NOTIFY_SOCKET` en el entorno (lo hereda de la sesión de systemd), `start` enlaza `<root>/<id>/notify/notify.sock`; con un `--root` cuya ruta total da 115 bytes, más que `sun_path`, falla con `bind: invalid argument` y el contenedor queda en `created`. Con ruta corta, `start` sobre un servicio largo no regresó en 5 s; sin la variable regresó en 5 ms. C6 quita la variable; C13 tendrá que hacer lo mismo |
 | systemd-run | sistema | `--user --scope -q -p Delegate=yes` |
 
 ## Dependencias Go (`go list -m ...@latest`)

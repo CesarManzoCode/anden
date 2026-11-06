@@ -4,6 +4,7 @@
 alpine and the synthetic image are imported into a clean registry and verified. Then one byte in the middle of
 the alpine layer blob is flipped, verify runs again and `anden image unpack` tries to bring the image into a
 clean node store, which copies and verifies every blob (D10). That use must exit non-zero and name the blob.
+`blobs_checked` and `mismatches` are those of the intact store; `after_corruption` holds the second verify.
 """
 import json
 import shutil
@@ -72,7 +73,10 @@ def main():
             return 1
 
         rc_before, before = verify(log)
-        report["before"] = {"rc": rc_before, **(before or {})}
+        report["verify_rc"] = rc_before
+        if before is not None:
+            report["blobs_checked"] = before.get("blobs_checked")
+            report["mismatches"] = before.get("mismatches")
 
         manifest = json.loads((REGISTRY / "blobs" / "sha256" / digests["alpine"].split(":", 1)[1]).read_text())
         layer = manifest["layers"][0]["digest"]
@@ -83,10 +87,7 @@ def main():
         report["corrupted_blob"] = layer
 
         rc_after, after = verify(log)
-        report["verify_rc"] = rc_after
-        if after is not None:
-            report["blobs_checked"] = after.get("blobs_checked")
-            report["mismatches"] = after.get("mismatches")
+        report["after_corruption"] = {"rc": rc_after, **(after or {})}
 
         use = anden("unpack", "--digest", digests["alpine"], "--dest", str(STATE / "node-store"))
         log.write(f"$ unpack: exit {use.returncode}\n{use.stdout}{use.stderr}")
@@ -95,11 +96,12 @@ def main():
 
     force_rmtree(STATE)
     lib.write_report("c21", report)
-    ok = (rc_before == 0 and before is not None and before.get("mismatches") == []
-          and rc_after != 0 and report["mismatches"] == [layer]
+    ok = (rc_before == 0 and report["mismatches"] == []
+          and rc_after != 0 and after is not None and after.get("mismatches") == [layer]
           and report["corrupted_use_rc"] not in (0, None) and layer in (report["corrupted_use_stderr"] or "")
           and not report["errors"])
-    print(f"checked {report['blobs_checked']} blobs, mismatches {report['mismatches']}, "
+    print(f"checked {report['blobs_checked']} blobs, mismatches {report['mismatches']}, after corrupting one "
+          f"{report['after_corruption'].get('mismatches')}, "
           f"use of the corrupted image exited {report['corrupted_use_rc']}", flush=True)
     return 0 if ok else 1
 
