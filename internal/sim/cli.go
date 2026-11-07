@@ -118,6 +118,11 @@ func Down(state string) error {
 	return removeState(abs, SocketDir(h, os.Getenv("XDG_RUNTIME_DIR")))
 }
 
+// downKillTimeout is how long down waits for the killed scope to empty. After
+// hundreds of instances on a busy disk it took longer than 10 s, and a down
+// that gave up left the scope for the next datacenter to find.
+const downKillTimeout = 60 * time.Second
+
 // killScope empties and removes the scope, found through dc.json or, when
 // up failed before writing it, through systemd.
 func killScope(abs, h string) error {
@@ -139,7 +144,7 @@ func killScope(abs, h string) error {
 	if err := writeFile(filepath.Join(scope, "cgroup.kill"), "1"); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	if err := waitEmpty(scope, 10*time.Second); err != nil {
+	if err := waitEmpty(scope, downKillTimeout); err != nil {
 		return err
 	}
 	removeCgroupTree(scope)

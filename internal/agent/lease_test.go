@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/grpc"
+
 	andenv1 "github.com/CesarManzoCode/anden/gen/anden/v1"
 	"github.com/CesarManzoCode/anden/internal/wake"
 )
@@ -134,6 +136,45 @@ func TestNoStartWithoutLease(t *testing.T) {
 	a.reconcile(context.Background())
 	if len(a.instances) != 0 {
 		t.Fatalf("reconcile started %d instances without a lease", len(a.instances))
+	}
+}
+
+// heartbeatOnly answers heartbeats and counts them; any other call panics.
+type heartbeatOnly struct {
+	andenv1.AgentControlClient
+	beats chan uint64
+}
+
+func (h heartbeatOnly) Heartbeat(_ context.Context, req *andenv1.HeartbeatRequest, _ ...grpc.CallOption) (*andenv1.HeartbeatResponse, error) {
+	h.beats <- req.GetEpoch()
+	return &andenv1.HeartbeatResponse{LeaseTtlMs: 2000}, nil
+}
+
+func TestKeepLeaseRenewsWhatTheBeatLeftLate(t *testing.T) {
+	l := newLease(time.Now)
+	l.grant(time.Now(), 2*time.Second)
+	a := &Agent{lease: l, epoch: 3, cfg: Config{Node: "node1"}}
+	client := heartbeatOnly{beats: make(chan uint64, 16)}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go a.keepLease(ctx, client)
+	select {
+	case <-client.beats:
+		t.Fatal("a heartbeat while the lease was fresh")
+	case <-time.After(500 * time.Millisecond):
+	}
+	// The beat is stuck behind a slow write: the keeper renews before the TTL.
+	select {
+	case epoch := <-client.beats:
+		if epoch != 3 {
+			t.Fatalf("heartbeat with epoch %d, want 3", epoch)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("no heartbeat with half the TTL gone")
+	}
+	time.Sleep(50 * time.Millisecond)
+	if !l.valid() || l.late() {
+		t.Fatal("the keeper's heartbeat did not renew the lease")
 	}
 }
 

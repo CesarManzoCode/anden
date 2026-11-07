@@ -95,6 +95,10 @@ type Instance struct {
 	Route      string
 }
 
+// maxConns is above the default of one per CPU: writes that wait for a slow
+// commit hold their connection, and the reads of a heartbeat must still find one.
+const maxConns = 32
+
 type Store struct {
 	pool *pgxpool.Pool
 }
@@ -112,7 +116,12 @@ func quote(v string) string {
 
 // Open connects and applies the embedded schema if it is missing.
 func Open(ctx context.Context, connString string) (*Store, error) {
-	pool, err := pgxpool.New(ctx, connString)
+	cfg, err := pgxpool.ParseConfig(connString)
+	if err != nil {
+		return nil, err
+	}
+	cfg.MaxConns = maxConns
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -316,14 +325,16 @@ func (s *Store) ReplaceInstances(ctx context.Context, node string, epoch int64, 
 		if _, err := tx.Exec(ctx, "DELETE FROM instances WHERE node = $1", node); err != nil {
 			return err
 		}
-		for _, in := range instances {
-			if _, err := tx.Exec(ctx, `INSERT INTO instances (id, service, node, version, generation, state, addr, seccomp, route)
-				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-				in.ID, in.Service, node, in.Version, in.Generation, in.State, in.Addr, in.Seccomp, in.Route); err != nil {
-				return err
-			}
+		// One COPY instead of an INSERT per instance: a node reports all of them
+		// at each change, and with hundreds the round trips held the node row
+		// long enough to delay the next heartbeat past the lease.
+		rows := make([][]any, len(instances))
+		for i, in := range instances {
+			rows[i] = []any{in.ID, in.Service, node, in.Version, in.Generation, in.State, in.Addr, in.Seccomp, in.Route}
 		}
-		return nil
+		_, err = tx.CopyFrom(ctx, pgx.Identifier{"instances"},
+			[]string{"id", "service", "node", "version", "generation", "state", "addr", "seccomp", "route"}, pgx.CopyFromRows(rows))
+		return err
 	})
 }
 

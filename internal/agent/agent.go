@@ -195,6 +195,7 @@ func (a *Agent) Run(ctx context.Context) error {
 	a.mu.Lock()
 	a.control = s.client
 	a.mu.Unlock()
+	go a.keepLease(ctx, s.client)
 	tick := time.NewTicker(defaultHeartbeat)
 	defer tick.Stop()
 	for {

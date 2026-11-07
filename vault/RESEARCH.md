@@ -101,6 +101,8 @@ Fuentes primarias con su revisión fijada, consultadas el 6 nov 2026. Una págin
 | `make gen` ejecutado en esta máquina | protoc 36.1 (el encabezado generado dice `protoc v7.36.1`), `protoc-gen-go` v1.36.12, `protoc-gen-go-grpc` v1.6.2 | Genera `gen/anden/v1/anden.pb.go` y `anden_grpc.pb.go` con `paths=source_relative`; los campos `optional` de proto3 salen como punteros (`*uint32`) |
 | pgx, `pgconn/config.go` | `github.com/jackc/pgx/v5` v5.12.0 | Un `host` que empieza con `/` es un directorio de socket Unix y la dirección es `<dir>/.s.PGSQL.<puerto>`; los valores entre comillas simples admiten escapes con `\` |
 | pgx, `conn.go` | v5.12.0 | `Exec` sin argumentos usa siempre el protocolo simple, que acepta varias sentencias en una llamada; `BeginFunc` confirma o revierte la transacción |
+| pgx, `copy_from.go`, `tx.go` (consultado el 7 nov 2026 para el fixer de k5) | v5.12.0 | `Tx.CopyFrom(ctx, pgx.Identifier{tabla}, columnas, pgx.CopyFromRows([][]any))` manda las filas en un solo `COPY ... FROM STDIN` dentro de la transacción |
+| pgx, `pgxpool/pool.go` (consultado el 7 nov 2026 para el fixer de k5) | v5.12.0 | `MaxConns` vale por defecto el mayor de 4 y `runtime.NumCPU()`; se cambia en el `Config` de `pgxpool.ParseConfig` antes de `pgxpool.NewWithConfig` |
 | grpc, `internal/resolver/unix/unix.go` | `google.golang.org/grpc` v1.85.0 | El destino `unix:///ruta/absoluta` toma la ruta del URL; una autoridad no vacía es error |
 | `go get` y `go mod tidy` | go1.27.3 | grpc v1.85.0 arrastra `golang.org/x/sys` v0.48.0 como indirecta; pgxpool necesita `github.com/jackc/puddle/v2` v2.2.3. El proxy de Go solo respondió por IPv4: con IPv6 dio `network is unreachable` |
 

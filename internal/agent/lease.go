@@ -81,6 +81,13 @@ func (l *lease) valid() bool {
 	return l.active && l.now().Sub(l.renewed) < l.ttl
 }
 
+// late says the lease is held and half its TTL has gone since the last renewal.
+func (l *lease) late() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.active && l.now().Sub(l.renewed) >= l.ttl/2
+}
+
 // expire drops a held lease whose TTL ran out and reports it, once.
 func (l *lease) expire() bool {
 	l.mu.Lock()
@@ -107,6 +114,37 @@ func (a *Agent) fenceLoop(ctx context.Context) {
 		}
 		if a.lease.expire() {
 			a.fence()
+		}
+	}
+}
+
+// keepLease renews the lease with a heartbeat of its own when the beat has not
+// renewed it for half the TTL. The beat sends intents and reports before and
+// after its heartbeat, and those are writes that wait for a commit: on a busy
+// disk they took longer than the TTL and fenced a node that the control plane
+// still heard. A heartbeat only reads, and its assignments are left to the beat.
+func (a *Agent) keepLease(ctx context.Context, client andenv1.AgentControlClient) {
+	tick := time.NewTicker(leaseCheck)
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+		}
+		a.mu.Lock()
+		epoch := a.epoch
+		a.mu.Unlock()
+		if epoch == 0 || !a.lease.late() {
+			continue
+		}
+		rctx, cancel := context.WithTimeout(ctx, rpcTimeout)
+		asked := time.Now()
+		resp, err := client.Heartbeat(rctx, &andenv1.HeartbeatRequest{Node: a.cfg.Node, Epoch: epoch})
+		cancel()
+		// A refused epoch is for the beat to handle: it registers again.
+		if err == nil {
+			a.lease.renew(asked, msDuration(resp.GetLeaseTtlMs()))
 		}
 	}
 }

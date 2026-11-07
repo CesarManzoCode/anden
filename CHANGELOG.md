@@ -14,6 +14,9 @@
 
 - `make check` ya no revisa el formato de los `.go` bajo `.run/`, donde C28 deja su clon.
 - Un servicio que duerme sin snapshot ya no deja en su directorio el bundle, los archivos de sus namespaces ni el punto de montaje del rootfs: solo `upper/` y `work/`. El despertar por `relaunch` los vuelve a crear.
+- El reporte de instancias de un nodo se guarda con un solo `COPY` en vez de un `INSERT` por instancia, y `andend` abre hasta 32 conexiones a Postgres en vez de una por CPU.
+- El agente manda un latido aparte, que solo lee, cuando su ciclo normal lleva medio TTL sin renovar la concesión porque espera intenciones o reportes que escriben.
+- `anden down` espera hasta 60 s, y no 10 s, a que el scope quede vacío después de `cgroup.kill`.
 
 ## K4: colocación, rollouts, caída y partición (2026-11-07)
 
