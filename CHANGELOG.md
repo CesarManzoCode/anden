@@ -1,6 +1,6 @@
 # Historial de cambios
 
-## K4: orquestación y fallos (en curso)
+## K4: colocación, rollouts, caída y partición (2026-11-07)
 
 ### Agregado
 
@@ -19,6 +19,14 @@
 
 - `DeployService` ya no para la instancia vieja antes de arrancar la nueva, salvo en un singleton. Mientras haya un despliegue en curso, otro sobre el mismo servicio responde `FAILED_PRECONDITION`.
 - `GetService`, `ListServices` y `anden status` ya no muestran instancias de un nodo muerto.
+
+### Medido
+
+- En 50 instancias de 6 a 12 servicios, el scheduler nunca excede la capacidad de un nodo ni junta dos servicios del mismo grupo de anti-afinidad. Coloca 289 servicios frente a 362 de la fuerza bruta, y alcanza el óptimo en 9 instancias (C15).
+- Un rollout bajo 200 peticiones por segundo no pierde ninguna de 6000, y tras el overlap solo responde v2 (C16).
+- Una versión cuyo healthcheck falla arranca pero no recibe ninguna petición, y la anterior sigue activa sin errores en 6000 peticiones (C17).
+- Al matar un nodo, sus dos servicios responden desde otro nodo tras 4.70 s sin servicio (C18).
+- Con el nodo de un singleton particionado, el escritor viejo para antes de que arranque el nuevo, con 2.645 s entre ambos (C19).
 
 ## K3: restauración, desglose por fases, descubrimiento y comparación (2026-11-07)
 

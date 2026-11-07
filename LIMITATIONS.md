@@ -79,7 +79,7 @@ Fuente única de lo que Andén no demuestra. Ningún otro archivo los repite.
 
 ## Caída, partición y fencing
 
-- El orden de D08 (autofencing a los 2 s, recolocación a los 4 s) está implementado y probado con relojes falsos en Go. En el datacenter lo miden C18 y C19, que todavía no se han corrido.
+- El orden de D08 (autofencing a los 2 s, recolocación a los 4 s) está probado con relojes falsos en Go. En el datacenter solo lo miden una corrida de C18 y una de C19 (ver «Alcance de lo medido en K4»).
 - El agente revisa su concesión cada 50 ms: el `cgroup.kill` llega entre 2 s y unos 2.05 s después de enviar el último latido aceptado, más lo que tarde el kernel. Un despertar o un arranque que ya corría en ese momento puede dejar procesos que el barrido no alcanza; esos se matan cuando ese despertar termina y la instancia se destruye, no en el barrido. No está medido cuánto tarda.
 - El autofencing destruye todas las instancias del nodo, también las dormidas: su `upper/` se borra y el snapshot de `restore` se pierde. Tras una partición de entre 2 y 4 s, que el plano de control no alcanza a ver como caída, el nodo vuelve a arrancar desde cero lo que sigue asignado a él, con tiempo sin servicio.
 - Si `andend` deja de responder latidos más de 2 s (un reinicio lento, Postgres caído, una sobrecarga), todos los agentes se autofencian y matan sus instancias, y las arrancan de nuevo al registrarse con una época nueva. No está medido cuánto tarda `andend` en volver tras un SIGKILL; C2 solo observa que el estado no cambió.
@@ -193,6 +193,18 @@ Fuente única de lo que Andén no demuestra. Ningún otro archivo los repite.
 - C14 inyecta 100 peticiones por ruta con retardo de hasta 20 ms desde el inicio del sueño. Solo 97 (`relaunch`) y 96 (`restore`) cayeron dentro de la transición; las demás se atendieron fuera de ella. «Siempre se atiende» vale para esas muestras, no como garantía.
 - La verificación de C12 a C14 usa la receta de `restore` extendida por el fixer (ver «Dormir y despertar»), no la de D03 al pie de la letra.
 
+## Alcance de lo medido en K4
+
+- Cada cifra de K4 sale de una sola corrida sobre un solo árbol, la de la verificación del cierre. No se midió cuánto varía entre corridas.
+- C15 mide el scheduler fuera del datacenter, con `anden placement solve` sobre 50 instancias sintéticas de 3 nodos y 6 a 12 servicios. No mide la colocación que hace el reconciliador con servicios reales, ni instancias de más de 12 servicios, donde `placeopt` no sirve de comparación.
+- En C15 el scheduler coloca 289 servicios frente a 362 de la fuerza bruta (73 menos) y coincide con el óptimo en 9 de 50 instancias. La conclusión `equivalente` es la declarada en el contrato antes de medir: dice que se comparó el mismo problema y objetivo, no que el scheduler sea igual de bueno.
+- C16 y C17 miden un `echosvc` con una petición por conexión (`-keepalive=false`). No miden conexiones largas que crucen el cambio de versión ni el draining de una conexión abierta.
+- C16 corre con overlap de 5 s y draining de 2 s, y C17 con `healthcheck_timeout_seconds` de 10 s, no con los defaults del producto (20 s, 20 s y 60 s). C17 solo mide un healthcheck HTTP que responde 503; no mide uno TCP, uno que agote el tiempo sin responder ni un rollback de un singleton.
+- Tras el overlap, C16 toma 50 muestras y C17 20. Que «solo responde v2» vale para esas muestras.
+- C18 mata un nodo una vez, con dos servicios despiertos que no son singleton; los dos fueron al mismo nodo (node2), así que no mide la anti-afinidad en la recolocación ni la recolocación de servicios dormidos. Los 4.70 s sin servicio se miden con una sonda cada 100 ms, así que su resolución es de 100 ms.
+- C19 particiona node1 una vez, durante 7.02 s, con un solo singleton. No mide una partición de entre 2 y 4 s (que el plano de control no ve como caída), ni `anden chaos slow`, que ningún criterio usa.
+- En C19 el hueco entre escritores fue de 2.645 s: un singleton queda ese tiempo sin escritor activo. Que no haya solape se mide solo en esa corrida, con relojes de un solo kernel.
+
 ## Sin demostrar todavía
 
-Todo lo que sigue a K3: colocación, rollouts, caída y partición, observabilidad y densidad. Esta sección se reduce conforme cada K cierre.
+Todo lo que sigue a K4: observabilidad, densidad y construcción limpia. Esta sección se reduce conforme cada K cierre.

@@ -14,7 +14,7 @@ Cada resultado se mide con un cliente externo y contra una comparación externa,
 | K1 | Runtime OCI y almacén de imágenes | Cerrada |
 | K2 | Datacenter, API y despertar por relanzamiento | Cerrada |
 | K3 | Restauración, desglose por fases, descubrimiento y comparación | Cerrada |
-| K4 | Colocación, rollouts, caída y partición | Pendiente |
+| K4 | Colocación, rollouts, caída y partición | Cerrada |
 | K5 | Observabilidad, densidad y construcción | Pendiente |
 | K6 | Diseño y publicación de resultados | Pendiente |
 
@@ -43,8 +43,13 @@ Medido el 6 y 7 nov 2026 en esta máquina (kernel 7.2.14, Ryzen 5 5600G). Los l�
 | C12 | Suma de las 7 fases contra `wakeclient` | 100 despertares por ruta: 200 de 200 dentro de máx(5 ms, 10 %), en `relaunch` y en `restore` |
 | C13 | runc 1.5.2, crun y `criu restore` directo, n = 100 por fila | p50 / p90 / p99 / máx en ms. `anden-relaunch` 55.3 / 62.2 / 66.6 / 66.9 y `anden-restore` 33.6 / 37.0 / 40.0 / 40.5. `runc` 38.0 / 38.9 / 39.3 / 60.2, `crun` 46.7 / 47.8 / 79.3 / 79.3 y `criu-restore` 16.8 / 17.2 / 17.5 / 17.5. `relaunch` frente a runc y crun: comparable; `restore` frente a `criu restore`: equivalente en el mecanismo |
 | C14 | Petición inyectada mientras el servicio se duerme | 100 por ruta, 0 errores y 0 timeouts; 97 en `relaunch` y 96 en `restore` cayeron dentro de la transición |
+| C15 | Fuerza bruta de `placeopt`, semillas 1 a 50, n de 6 a 12 | 0 violaciones de capacidad o anti-afinidad en 50 instancias. El scheduler coloca 289 servicios y la fuerza bruta 362: brecha de 73, máximo 4 por instancia, óptimo alcanzado en 9 de 50. Conclusión: equivalente (mismo problema y objetivo; la brecha es real) |
+| C16 | vegeta a 200 peticiones/s durante 30 s, overlap 5 s, draining 2 s | 6000 peticiones, 0 errores. El cambio a v2 se ve 0.98 s después del despliegue y, tras el overlap, 50 de 50 muestras responden v2 |
+| C17 | vegeta a 200 peticiones/s durante 30 s; v3 con healthcheck que falla | 6000 peticiones, 0 errores. v3 arrancó y recibió 0 peticiones; v2 sigue activa para la API y en 20 de 20 muestras del borde |
+| C18 | Sonda externa cada 100 ms tras `anden chaos kill` | Los dos servicios de node1 vuelven en node2 con 4.70 s sin servicio cada uno, frente al límite de 10 s |
+| C19 | Latidos del singleton en los tres nodos durante una partición de 7.02 s | 2 escritores en 258 latidos, sin solape: el primero deja de escribir 1.91 s después de la partición y el segundo empieza 4.55 s después, con 2.645 s sin escritor |
 
-De K4 en adelante todavía no hay mediciones.
+De K5 en adelante todavía no hay mediciones.
 
 ## Uso
 
