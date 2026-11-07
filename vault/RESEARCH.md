@@ -104,6 +104,23 @@ Fuentes primarias con su revisión fijada, consultadas el 6 nov 2026. Una págin
 | grpc, `internal/resolver/unix/unix.go` | `google.golang.org/grpc` v1.85.0 | El destino `unix:///ruta/absoluta` toma la ruta del URL; una autoridad no vacía es error |
 | `go get` y `go mod tidy` | go1.27.3 | grpc v1.85.0 arrastra `golang.org/x/sys` v0.48.0 como indirecta; pgxpool necesita `github.com/jackc/puddle/v2` v2.2.3. El proxy de Go solo respondió por IPv4: con IPv6 dio `network is unreachable` |
 
+## Simulador (consultado el 6 nov 2026 para k2-02)
+
+| Fuente | Revisión | Dato usado |
+|---|---|---|
+| `systemd-run --help`, `man systemd-run`, ejecutado | systemd 262 | `-u, --unit=UNIT`; con `--scope` la unidad se llama `UNIT.scope` y el proceso queda en `/user.slice/user-<uid>.slice/user@<uid>.service/app.slice/UNIT.scope` (leído de `/proc/self/cgroup`). Tras salir, `systemctl --user show -P ControlGroup UNIT.scope` todavía imprime la ruta aunque el directorio ya no exista |
+| `systemctl --help`, `man systemctl` | systemd 262 | `-P NAME` es `--value --property=NAME`; `reset-failed UNIT`; `stop UNIT` |
+| `man unshare` | util-linux 2.42.4 | `--propagation` vale `private` por defecto con `--mount`; `--kill-child[=signame]` |
+| `nsenter --help`, `man nsenter` | util-linux 2.42.4 | `-t PID`, `-U`, `-n`, `-m`; `--preserve-credentials` no toca uid ni gid al entrar al namespace de usuario |
+| `lsns --help`, ejecutado | util-linux 2.42.4 | `-t net -J -o NS,PID,COMMAND` da `{"namespaces": [{"ns", "pid", "command"}]}` |
+| `man ip`, `man ip-link` | iproute2 7.3.0 | `-b, -batch FILE` lee de un archivo o de la entrada estándar y para en el primer error; `ip link add DEV type veth peer name NAME`; `ip link set DEV netns PID`; `ip -n` solo acepta un nombre de `/run/netns`, no un pid, por eso se usa `nsenter -t PID -n ip` |
+| `sysctl --help` | procps-ng (sistema) | `-q -w net.ipv4.ip_forward=1` |
+| `sleep --help` | coreutils (sistema) | Documenta un número entero o decimal, no `infinity`: los procesos que sostienen un netns usan `sleep 2147483647` |
+| `rm --help` | coreutils (sistema) | `--one-file-system` |
+| `/proc/config.gz` | kernel 7.2.14 | `CONFIG_PROC_CHILDREN=y`: existe `/proc/<pid>/task/<tid>/children` |
+| `/proc/self/status` | kernel 7.2.14 | `NSpid:` lista el pid en cada namespace de pid, del más externo al propio |
+| `man nft` | nftables 1.1.7 | `list tables [family]`, `list ruleset` |
+
 ## Documentación oficial sin revisión fija (consultada el 6 nov 2026)
 
 | Fuente | Dato |

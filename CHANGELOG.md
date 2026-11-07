@@ -24,6 +24,8 @@
 - API gRPC publicada en `api/anden/v1/anden.proto`, con el código Go generado en `gen/anden/v1/`: servicio `Anden` para clientes y `AgentControl` para los agentes de nodo.
 - `andend`, el plano de control: responde la API en un socket Unix y en TCP, guarda el estado en PostgreSQL por socket Unix y migra el esquema al arrancar. `restore` con volúmenes se rechaza con `FAILED_PRECONDITION`.
 - `anden svc create|get|list|sleep|wake|delete|deploy|move`, que envuelve la API.
+- `anden up`, `down`, `status`, `exec` y `chaos kill`: levantan y destruyen el datacenter simulado (scope de systemd delegado, Postgres, namespace de usuario con el plano de control, tres nodos y un cliente), corren un comando en el netns de un nodo, del cliente o raíz, y tiran un nodo con `cgroup.kill`.
+- Criterio de aceptación C27 (`acceptance/c27_lifecycle.py`): ciclo de vida sin rastro.
 
 - Contrato del sistema, con decisiones cerradas de lenguaje, arquitectura, rutas de despertar, proxy, simulador, colocación y fencing.
 - Investigación con fuentes primarias y versiones de herramientas verificadas en la máquina de destino.

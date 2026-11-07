@@ -24,7 +24,7 @@ Fuente única de lo que Andén no demuestra. Ningún otro archivo los repite.
 - La ruta `restore` no admite volúmenes.
 - CRIU no puede volcar sockets MPTCP. Un servicio Go debe correr con `GODEBUG=multipathtcp=0` para usar `restore`; si el volcado falla, el servicio cae a `relaunch` y pierde su memoria.
 - Las capas extraídas sin root no preservan dueños reales con la misma fidelidad, y por eso C20 no compara dueños.
-- El listado de nftables de C27 solo ve lo que hay dentro del namespace. Las reglas del host no se pueden leer sin root; Andén tampoco puede escribirlas.
+- Sin `sudo -n`, el listado de nftables de C27 solo ve lo que hay dentro del namespace del datacenter: las reglas del host no se pueden leer sin root. Andén tampoco puede escribirlas.
 - La medición en caché fría de C8 necesita `sudo` y se omite con código 77 si falta.
 - En C6, `swapon` no distingue si actuó el filtro seccomp: medido con `unshare -U --map-root-user` y sin filtro, ya da `EPERM`. Quien lo distingue es `mount`, que sin filtro da `ENOENT` sobre la ruta inexistente que usa `probe`.
 
@@ -58,6 +58,13 @@ Fuente única de lo que Andén no demuestra. Ningún otro archivo los repite.
 - El reconciliador por ahora solo persiste: calcula el estado observado a partir de lo que reportan los agentes, pero no les ordena nada. `MoveService` guarda el nodo deseado y no mueve el servicio.
 - La vigencia de un nodo vive en la memoria de `andend`, con su reloj monótono. Tras reiniciar `andend`, un nodo del que no se supo nada cuenta como visto en el arranque, así que se declara muerto 4 s después y no antes.
 - `GetService` y `ListServices` leen todas las instancias reportadas para armar la respuesta. No está medido cuánto cuesta eso con muchos servicios.
+
+## Simulador
+
+- `anden up` necesita `anden-agent` junto a `anden` en `bin/`. Sin él, `_dc-init` falla antes de arrancar `andend` y `up` sale con error.
+- `anden down` solo borra un directorio de estado que tenga `dc.json` o `dc.log`. Si `up` falla, mata el scope pero deja el estado para inspeccionarlo hasta `anden down`.
+- `anden chaos` solo implementa `kill` por ahora; `partition`, `heal` y `slow` no existen todavía.
+- Los procesos de `anden exec` entran al namespace de usuario y de red, no al de montaje del datacenter: ven los montajes del host.
 
 ## Mediciones
 

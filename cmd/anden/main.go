@@ -1,5 +1,5 @@
-// Command anden is Andén's command line. This version has the image and
-// service subcommands of the contract (section 5).
+// Command anden is Andén's command line: the datacenter simulator, image
+// and service subcommands of the contract (section 5).
 package main
 
 import (
@@ -9,6 +9,11 @@ import (
 )
 
 const usage = `usage:
+  anden up [--state DIR] [--timeout D] [--json]
+  anden down [--state DIR] [--json]
+  anden status [--state DIR] [--json]
+  anden exec --ns client|root|nodeN [--state DIR] -- CMD...
+  anden chaos kill nodeN [--state DIR] [--json]
   anden image import --layout DIR:TAG [--state DIR] [--json]
   anden image unpack --digest D --dest STORE [--state DIR] [--json]
   anden image mount --digest D --dest DIR [--state DIR] [--json]
@@ -29,6 +34,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	if len(args) > 0 && args[0] == "svc" {
 		return runSvc(args[1:], stdout, stderr)
+	}
+	if len(args) > 0 {
+		switch args[0] {
+		case "up", "down", "status", "exec", "chaos", "_dc", "_dc-init":
+			return runDC(args[0], args[1:], stdout, stderr)
+		}
 	}
 	fmt.Fprint(stderr, usage)
 	return 2
