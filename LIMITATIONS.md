@@ -79,7 +79,7 @@ Fuente única de lo que Andén no demuestra. Ningún otro archivo los repite.
 
 ## Caída, partición y fencing
 
-- El orden de D08 (autofencing a los 2 s, recolocación a los 4 s) está probado con relojes falsos en Go. En el datacenter solo lo miden una corrida de C18 y una de C19 (ver «Alcance de lo medido en K4»).
+- El orden de D08 (autofencing a los 2 s, recolocación a los 4 s) está probado con relojes falsos en Go. En el datacenter solo lo miden tres corridas de C18 y tres de C19 (ver «Alcance de lo medido en K4»).
 - El agente revisa su concesión cada 50 ms: el `cgroup.kill` llega entre 2 s y unos 2.05 s después de enviar el último latido aceptado, más lo que tarde el kernel. Un despertar o un arranque que ya corría en ese momento puede dejar procesos que el barrido no alcanza; esos se matan cuando ese despertar termina y la instancia se destruye, no en el barrido. No está medido cuánto tarda.
 - El autofencing destruye todas las instancias del nodo, también las dormidas: su `upper/` se borra y el snapshot de `restore` se pierde. Tras una partición de entre 2 y 4 s, que el plano de control no alcanza a ver como caída, el nodo vuelve a arrancar desde cero lo que sigue asignado a él, con tiempo sin servicio.
 - Si `andend` deja de responder latidos más de 2 s (un reinicio lento, Postgres caído, una sobrecarga), todos los agentes se autofencian y matan sus instancias, y las arrancan de nuevo al registrarse con una época nueva. No está medido cuánto tarda `andend` en volver tras un SIGKILL; C2 solo observa que el estado no cambió.
@@ -185,7 +185,8 @@ Fuente única de lo que Andén no demuestra. Ningún otro archivo los repite.
 - C8 en caché fría solo existe si `sudo -n` funciona en la corrida. `drop_caches` vacía la caché de toda la máquina, no solo la del servicio.
 - C9 mide HTTP con `echosvc`: 32 clientes, 5 rondas y una conexión por petición. No mide conexiones que transfieran mucho ni que vivan mucho durante el despertar.
 - C10 solo mide `PING`, `SET` y `GET` de `redis-cli` contra Valkey, con conexiones nuevas y sin persistencia: un `SET` no sobrevive al sueño con `relaunch`, y no se mide un servicio TCP con persistencia.
-- Cada cifra de K2 sale de una sola corrida sobre un solo árbol. No se midió cuánto varía entre corridas.
+- Las cifras de K2 se midieron en seis corridas sobre seis árboles distintos, todas el 7 nov 2026, sin repetir ninguna sobre el mismo árbol ni hacer análisis estadístico. El `README.md` da la última (árbol `70b33e558d23`).
+- Resultado negativo: en la corrida de C8 tibia sobre el árbol `a24a8a7b40a3` (19:12:47Z), hecha cuando la máquina estaba cargada, según el fixer de K5 por otro proyecto (sin medir), el p99 fue 271.2 ms y el máximo 1237.4 ms: una muestra pasó de 1 s. El criterio pasa porque mide el p99. En las otras cinco corridas el p99 estuvo entre 63.3 y 68.4 ms y el máximo entre 66.2 y 141.1 ms. «Bajo 1 s» vale para el p99, no para cada despertar, y no se midió con carga controlada.
 - K2 cerró sin cifra de C8 en caché fría: `sudo -n` no estaba disponible.
 - C1 recorre una vez el camino esperado con un solo servicio. `DeleteService` responde con el último estado (`ACTIVE`, no un estado de borrado), y C1 solo comprueba el código de esa llamada y el `NotFound` posterior: no mide que la instancia haya terminado.
 - C2 mata `andend` una vez, con 3 servicios activos y sin operaciones en curso. No mide la caída de Postgres ni de un agente, ni un SIGKILL durante un despertar o con servicios dormidos.
@@ -197,23 +198,24 @@ Fuente única de lo que Andén no demuestra. Ningún otro archivo los repite.
 
 ## Alcance de lo medido en K3
 
-- Cada cifra de K3 sale de una sola corrida sobre un solo árbol, hecha durante la sesión del fixer. No se midió cuánto varía entre corridas.
+- Las cifras de K3 se midieron en cuatro corridas sobre cuatro árboles distintos, sin repetir ninguna sobre el mismo árbol ni hacer análisis estadístico. El `README.md` da la última (árbol `70b33e558d23`).
+- Resultado negativo: en la corrida de C13 sobre el árbol `a24a8a7b40a3` (19:27:50Z), con la máquina cargada, `anden-restore` dio p90 de 157.1 ms y p99 de 230.4 ms, y `anden-relaunch` un máximo de 255.1 ms, frente a p99 de 38.0 a 40.0 ms y 64.4 a 66.6 ms en las otras tres corridas. Las filas de runc, crun y `criu restore` también se movieron (crun dio p90 de 84.6 ms, frente a unos 47 ms en las demás), pero ninguna tanto. No se investigó por qué la ruta `restore` fue la más sensible.
 - Que la ruta `restore` conserve la memoria del proceso no lo mide ningún criterio de K3: C12, C13 y C14 solo miden tiempos y respuestas de `echosvc`. La conservación solo está observada a mano en la investigación de K0 (D03).
 - C11 mueve una vez un solo servicio dormido, de node1 a node2, y lo despierta con `WakeService`. No mide un despertar provocado por una conexión después del movimiento, ni la ventana sin dirección entre `MoveService` y la siguiente pasada del reconciliador. Resuelve solo desde el netns `client`.
 - C12 mide 100 despertares por ruta de `echosvc`, uno a la vez. La tolerancia (máx(5 ms, 10 %)) se cumple en los 200; no dice nada de despertares concurrentes ni de un servicio que tarde más en escuchar.
-- C13 compara una sola imagen, `echosvc`, con n = 100 por fila. Las conclusiones (`comparable`, `equivalente`) son las declaradas antes de medir en el contrato, no el resultado de una prueba estadística. La diferencia de p50 entre `anden-restore` (33.6 ms) y `criu-restore` (16.8 ms) mezcla el costo de la plataforma con relojes que empiezan en sitios distintos y con límites de cgroup distintos, así que no aísla el costo de la plataforma.
-- C14 inyecta 100 peticiones por ruta con retardo de hasta 20 ms desde el inicio del sueño. Solo 97 (`relaunch`) y 96 (`restore`) cayeron dentro de la transición; las demás se atendieron fuera de ella. «Siempre se atiende» vale para esas muestras, no como garantía.
+- C13 compara una sola imagen, `echosvc`, con n = 100 por fila. Las conclusiones (`comparable`, `equivalente`) son las declaradas antes de medir en el contrato, no el resultado de una prueba estadística. La diferencia de p50 entre `anden-restore` (32.3 ms) y `criu-restore` (16.4 ms) en la última corrida mezcla el costo de la plataforma con relojes que empiezan en sitios distintos y con límites de cgroup distintos, así que no aísla el costo de la plataforma.
+- C14 inyecta 100 peticiones por ruta con retardo de hasta 20 ms desde el inicio del sueño. En la última corrida 97 por ruta cayeron dentro de la transición, y entre 96 y 99 en las anteriores; las demás se atendieron fuera de ella. «Siempre se atiende» vale para esas muestras, no como garantía.
 - La verificación de C12 a C14 usa la receta de `restore` extendida por el fixer (ver «Dormir y despertar»), no la de D03 al pie de la letra.
 
 ## Alcance de lo medido en K4
 
-- Cada cifra de K4 sale de una sola corrida sobre un solo árbol, la de la verificación del cierre. No se midió cuánto varía entre corridas.
+- Las cifras de K4 se midieron en tres corridas sobre tres árboles distintos, sin repetir ninguna sobre el mismo árbol ni hacer análisis estadístico. El `README.md` da la última (árbol `70b33e558d23`). C15 dio lo mismo en las tres; C18 dio 4.70, 4.80 y 5.30 s sin servicio, y el hueco de C19 2.65, 2.64 y 2.65 s.
 - C15 mide el scheduler fuera del datacenter, con `anden placement solve` sobre 50 instancias sintéticas de 3 nodos y 6 a 12 servicios. No mide la colocación que hace el reconciliador con servicios reales, ni instancias de más de 12 servicios, donde `placeopt` no sirve de comparación.
 - En C15 el scheduler coloca 289 servicios frente a 362 de la fuerza bruta (73 menos) y coincide con el óptimo en 9 de 50 instancias. La conclusión `equivalente` es la declarada en el contrato antes de medir: dice que se comparó el mismo problema y objetivo, no que el scheduler sea igual de bueno.
 - C16 y C17 miden un `echosvc` con una petición por conexión (`-keepalive=false`). No miden conexiones largas que crucen el cambio de versión ni el draining de una conexión abierta.
 - C16 corre con overlap de 5 s y draining de 2 s, y C17 con `healthcheck_timeout_seconds` de 10 s, no con los defaults del producto (20 s, 20 s y 60 s). C17 solo mide un healthcheck HTTP que responde 503; no mide uno TCP, uno que agote el tiempo sin responder ni un rollback de un singleton.
 - Tras el overlap, C16 toma 50 muestras y C17 20. Que «solo responde v2» vale para esas muestras.
-- C18 mata un nodo una vez, con dos servicios despiertos que no son singleton; los dos fueron al mismo nodo (node2), así que no mide la anti-afinidad en la recolocación ni la recolocación de servicios dormidos. Los 4.70 s sin servicio se miden con una sonda cada 100 ms, así que su resolución es de 100 ms.
+- C18 mata un nodo una vez, con dos servicios despiertos que no son singleton; los dos fueron al mismo nodo (node2), así que no mide la anti-afinidad en la recolocación ni la recolocación de servicios dormidos. El tiempo sin servicio se mide con una sonda cada 100 ms, así que su resolución es de 100 ms.
 - C19 particiona node1 una vez, durante 7.02 s, con un solo singleton. No mide una partición de entre 2 y 4 s (que el plano de control no ve como caída), ni `anden chaos slow`, que ningún criterio usa.
 - En C19 el hueco entre escritores fue de 2.645 s: un singleton queda ese tiempo sin escritor activo. Que no haya solape se mide solo en esa corrida, con relojes de un solo kernel.
 
@@ -232,6 +234,9 @@ Fuente única de lo que Andén no demuestra. Ningún otro archivo los repite.
 - C29 cuenta el árbol de trabajo con cloc, no lo versionado: un archivo sin commit dentro de las rutas de `acceptance/loc_paths.txt` entra en la cuenta. La prueba de Go que revisa esas rutas vive en `acceptance/loc_paths_test.go`, un archivo que la tabla de rutas del contrato no lista en `acceptance/`; no suma líneas porque cloc excluye `*_test.go`.
 - C29 pasa con apoyo menor que producto (razón 0.545). La referencia del método es 0.15: el apoyo es 3.6 veces esa referencia.
 
-## Sin demostrar todavía
+## Alcance de lo medido en K6
 
-Todo lo que sigue a K5: el documento de diseño (C30) y la publicación de resultados. Esta sección se reduce conforme cada K cierre.
+- C30 solo comprueba que `vault/DESIGN.md` exista y tenga sus cuatro secciones (`## Decisiones`, `## Alternativas descartadas`, `## Deuda técnica conocida` y `## Lo que no se demostró`). No comprueba que lo que dicen sea cierto ni que sus cifras coincidan con la evidencia.
+- Las cifras del `README.md` y de `vault/DESIGN.md` se copiaron de la última corrida de cada criterio (árbol `70b33e558d23`); K6 no volvió a medir nada. Editar esos documentos cambia `lib.tree_stamp()`, así que los informes de esa corrida dejan de coincidir con el árbol y la siguiente verificación repite los scripts, con cifras que pueden diferir.
+- La fracción 0.798 de C15 en el `README.md` (289 / 362) se calculó al escribirlo; no la reporta el script.
+- El documento de diseño no lo revisó nadie de fuera del proyecto.

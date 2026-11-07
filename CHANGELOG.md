@@ -1,5 +1,32 @@
 # Historial de cambios
 
+## 1.0.0 (2026-11-07)
+
+Primera versión completa: lo que se construyó de K1 a K5 y se midió en esta máquina. Las cifras están en el `README.md`, el porqué en `vault/DESIGN.md` y los límites en `LIMITATIONS.md`.
+
+### Qué hace
+
+- Levanta y destruye con `anden up` y `anden down`, sin root y sin dejar rastro, un datacenter de 3 nodos simulados con plano de control, PostgreSQL y un cliente externo.
+- Corre contenedores con su propio runtime OCI (namespaces, cgroups v2, seccomp y overlayfs) e imágenes OCI guardadas por contenido, con capas deduplicadas y digest verificado.
+- Duerme cualquier servicio TCP inactivo y lo despierta al llegar la primera conexión, reteniéndola sin perder ni duplicar peticiones, por relanzamiento o restaurando un volcado de CRIU, con desglose del despertar en 7 fases.
+- Resuelve servicios por nombre en `<servicio>.anden.internal` aunque duerman o cambien de nodo, y los expone en un borde estable.
+- Coloca con capacidad y anti-afinidad, despliega sin downtime, revierte una versión que no pasa salud y recoloca ante la caída o partición de un nodo, sin dos instancias activas de un singleton.
+- Expone métricas Prometheus del despertar, alertas probadas y un runbook por alerta.
+
+### Medido
+
+- El despertar por relanzamiento en caché tibia da p99 de 68.4 ms en la última corrida, bajo 1 s en esta máquina. Con la máquina cargada, una corrida dio un máximo de 1237.4 ms. La caché fría no se midió: falta `sudo -n`.
+- Restaurar con CRIU despierta con p50 de 32.3 ms, frente a 55.3 ms al relanzar.
+- Al matar un nodo, sus servicios vuelven en otro con 5.30 s sin servicio en la última corrida, frente al límite de 10 s.
+- Con 1000 servicios dormidos, cada uno ocupa 136.5 KiB en promedio y el p99 de despertar es 243.6 ms.
+- El scheduler coloca 289 servicios donde la fuerza bruta coloca 362.
+
+### Agregado
+
+- `vault/DESIGN.md`, el documento de diseño: decisiones, alternativas descartadas, deuda técnica y lo que no se demostró.
+- Criterio de aceptación C30 (`acceptance/c30_design.py`), que comprueba que ese documento exista y tenga sus cuatro secciones.
+- El `README.md` explica cómo construir, levantar el datacenter y correr la verificación, y publica la última corrida de cada criterio.
+
 ## K5: observabilidad, densidad y construcción (2026-11-07)
 
 ### Agregado
