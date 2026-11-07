@@ -79,6 +79,7 @@ Fuente única de lo que Andén no demuestra. Ningún otro archivo los repite.
 - En C13 las filas `runc`, `crun` y `criu-restore` corren sin límites de cgroup ni seccomp y sin proxy, sobre un overlay de una sola capa con `echosvc`; las de Andén tienen 1000 milicores y 128 MiB. Su reloj empieza antes de `create` o de `criu restore`, y el de Andén antes de `connect()`.
 - La fila `criu-restore` lanza el contenedor con `anden-runtime` antes del volcado: el volcado y la restauración son directos, el arranque inicial no.
 - Las filas sin proxy se miden reintentando la conexión cada milisegundo: esa granularidad entra en la muestra.
+- C13 deja en `.run/acceptance/c13/work/` el directorio de trabajo de overlay con modo 000. La corrida siguiente lo abre antes de borrarlo; mientras tanto, el `find` de `make check` no lo puede leer e imprime `Permission denied`, aunque sale con 0.
 
 ## Instancias
 
@@ -92,14 +93,14 @@ Fuente única de lo que Andén no demuestra. Ningún otro archivo los repite.
 
 ## Dormir y despertar
 
-- La receta de D03 tal cual no basta dentro del agente: el volcado falla por los nodos de `/dev` y por el stdio abierto desde fuera del contenedor (ver RESEARCH). Los seis nodos que liga `anden-runtime` (`null`, `zero`, `full`, `random`, `urandom`, `tty`) pasan como montajes externos de CRIU y se vuelven a ligar desde el `/dev` del host al restaurar, y el contenedor abre `/.anden/stdio.log` y su `/dev/null` dentro de su raíz (anotación `anden.stdio`). C12 y C13 despiertan por `restore`; que la memoria se conserve no lo mide ningún criterio de K3.
+- La receta de D03 tal cual no basta dentro del agente: el volcado falla por los nodos de `/dev` y por el stdio abierto desde fuera del contenedor (ver RESEARCH). Los seis nodos que liga `anden-runtime` (`null`, `zero`, `full`, `random`, `urandom`, `tty`) pasan como montajes externos de CRIU y se vuelven a ligar desde el `/dev` del host al restaurar, y el contenedor abre `/.anden/stdio.log` y su `/dev/null` dentro de su raíz (anotación `anden.stdio`).
 - Si la imagen no trae `/tmp`, `/proc`, `/dev` o `/dev/null`, el volcado los crea en el `upper/` de la instancia, porque son destino de un montaje de la vista.
 - `criu restore` corre dentro de la cgroup de la instancia: su memoria y sus procesos cuentan contra `memory.max` y `pids.max` del servicio. No se midió con qué límites deja de caber.
 - Solo cae a `relaunch` lo que falla antes de que `criu restore` termine bien. Un proceso restaurado que muere después deja la instancia en `FAILED`, como un arranque fallido.
 - Dormida con snapshot, la instancia conserva sus namespaces de red, UTS e IPC y su veth en `svc0`, con su IP configurada. Sin snapshot los libera, como `relaunch`.
 - El snapshot vive en la memoria del agente: si el agente se reinicia, o el servicio se mueve de nodo, el siguiente despertar es por `relaunch`. Las imágenes quedan en `snapshots/` hasta el siguiente volcado o el fin de la instancia.
 - La API solo da `route`; `route_requested` solo está en `wake_events.jsonl` y en el registro del agente.
-- El desglose por fases está escrito (k3-02) pero no medido: hasta que C12 corra, que las fases sumen lo que mide el cliente es hipótesis. Fuera de las fases quedan el saludo TCP antes del `accept` y lo que va del primer byte al último, que el cliente sí cuenta.
+- Fuera de las fases quedan el saludo TCP antes del `accept` y lo que va del primer byte al último, que el cliente sí cuenta. Las fases las mide el propio agente con su reloj; C12 solo compara su suma con el cliente, no cada fase por separado.
 - `placement` es solo la ida y vuelta de `SetAwake` al plano de control, con espera máxima de 200 ms. La respuesta no elige nodo todavía (D07, K4): con ella o sin ella, el despertar sigue en el mismo nodo. El latido manda después la misma intención otra vez, sin efecto.
 - En la ruta `restore`, `network` solo abre el netns y la cgroup que el sueño conservó; no crea nada.
 - Si la restauración falla y el despertar cae a `relaunch`, el tiempo de `criu restore` fallido se suma al `rootfs` del relanzamiento, porque cada fase cuenta desde la marca anterior.
@@ -115,7 +116,7 @@ Fuente única de lo que Andén no demuestra. Ningún otro archivo los repite.
 - Si un despertar falla (el arranque da error o nada escucha en 10 s), la instancia queda en `FAILED`, las conexiones retenidas se cierran y las nuevas también, hasta que `WakeService` o `DeployService` la reemplacen. No hay reintento automático.
 - Un `DeployService`, `MoveService` o `DeleteService` que llega durante un despertar cierra las conexiones retenidas en vez de pasarlas a la instancia nueva.
 - Solo espera el despertar a que el puerto acepte conexiones TCP, como pide D04. El `healthcheck` del servicio se usa en el primer arranque, no al despertar.
-- El despertar va siempre al nodo donde se durmió, sin comprobar que aún quepa (D07, K4). Mover un servicio dormido lo deja sin dirección hasta el siguiente `WakeService`: mientras tanto una conexión no lo despierta (D22, K4).
+- El despertar va siempre al nodo donde se durmió, sin comprobar que aún quepa (D07, K4).
 - Solo se retienen conexiones TCP sobre IPv4: el set `sleeping` es `ipv4_addr`, y `eth0` de una instancia no tiene dirección IPv6.
 - La señal de inactividad se muestrea a un cuarto de la ventana. Una conexión que abre y cierra entre dos muestras solo se ve por los paquetes que el servicio envió.
 - El servicio ve como origen la dirección de `svc0` en las conexiones que pasan por el proxy, no la del cliente.
@@ -159,6 +160,16 @@ Fuente única de lo que Andén no demuestra. Ningún otro archivo los repite.
 - C8 despierta un servicio a la vez y cada muestra se duerme con `SleepService`, no por inactividad.
 - C27 sube y destruye un datacenter sin servicios: no hay instancias, overlays, volúmenes ni elementos en el set `sleeping` que limpiar. Su lista de montajes lee el `mountinfo` del host, donde no aparecen los montajes del namespace privado del datacenter (`during` da vacío), así que no dice nada sobre esos montajes.
 
+## Alcance de lo medido en K3
+
+- Cada cifra de K3 sale de una sola corrida sobre un solo árbol, hecha durante la sesión del fixer. No se midió cuánto varía entre corridas.
+- Que la ruta `restore` conserve la memoria del proceso no lo mide ningún criterio de K3: C12, C13 y C14 solo miden tiempos y respuestas de `echosvc`. La conservación solo está observada a mano en la investigación de K0 (D03).
+- C11 mueve una vez un solo servicio dormido, de node1 a node2, y lo despierta con `WakeService`. No mide un despertar provocado por una conexión después del movimiento, ni la ventana sin dirección entre `MoveService` y la siguiente pasada del reconciliador. Resuelve solo desde el netns `client`.
+- C12 mide 100 despertares por ruta de `echosvc`, uno a la vez. La tolerancia (máx(5 ms, 10 %)) se cumple en los 200; no dice nada de despertares concurrentes ni de un servicio que tarde más en escuchar.
+- C13 compara una sola imagen, `echosvc`, con n = 100 por fila. Las conclusiones (`comparable`, `equivalente`) son las declaradas antes de medir en el contrato, no el resultado de una prueba estadística. La diferencia de p50 entre `anden-restore` (33.6 ms) y `criu-restore` (16.8 ms) mezcla el costo de la plataforma con relojes que empiezan en sitios distintos y con límites de cgroup distintos, así que no aísla el costo de la plataforma.
+- C14 inyecta 100 peticiones por ruta con retardo de hasta 20 ms desde el inicio del sueño. Solo 97 (`relaunch`) y 96 (`restore`) cayeron dentro de la transición; las demás se atendieron fuera de ella. «Siempre se atiende» vale para esas muestras, no como garantía.
+- La verificación de C12 a C14 usa la receta de `restore` extendida por el fixer (ver «Dormir y despertar»), no la de D03 al pie de la letra.
+
 ## Sin demostrar todavía
 
-Todo lo que sigue a K2: ruta `restore`, desglose por fases, descubrimiento, comparación con otros runtimes, colocación, rollouts, caída y partición, observabilidad y densidad. Esta sección se reduce conforme cada K cierre.
+Todo lo que sigue a K3: colocación, rollouts, caída y partición, observabilidad y densidad. Esta sección se reduce conforme cada K cierre.

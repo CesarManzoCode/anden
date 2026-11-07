@@ -13,14 +13,14 @@ Cada resultado se mide con un cliente externo y contra una comparación externa,
 | K0 | Fundación: contrato, investigación y plan | Hecha |
 | K1 | Runtime OCI y almacén de imágenes | Cerrada |
 | K2 | Datacenter, API y despertar por relanzamiento | Cerrada |
-| K3 | Restauración, desglose por fases, descubrimiento y comparación | Pendiente |
+| K3 | Restauración, desglose por fases, descubrimiento y comparación | Cerrada |
 | K4 | Colocación, rollouts, caída y partición | Pendiente |
 | K5 | Observabilidad, densidad y construcción | Pendiente |
 | K6 | Diseño y publicación de resultados | Pendiente |
 
 ## Resultados
 
-Medido el 6 nov 2026 en esta máquina (kernel 7.2.14, Ryzen 5 5600G). Los límites de cada cifra están en [`LIMITATIONS.md`](LIMITATIONS.md).
+Medido el 6 y 7 nov 2026 en esta máquina (kernel 7.2.14, Ryzen 5 5600G). Los límites de cada cifra están en [`LIMITATIONS.md`](LIMITATIONS.md).
 
 | Criterio | Comparación | Resultado medido |
 |---|---|---|
@@ -39,8 +39,12 @@ Medido el 6 nov 2026 en esta máquina (kernel 7.2.14, Ryzen 5 5600G). Los límit
 | C9 | Registro del cliente contra el del servicio | 32 clientes, 5 rondas: 1600 peticiones con respuesta y cada id una sola vez en el servicio |
 | C10 | `redis-cli` contra Valkey, solo con `-h` y `-p` | 15 de 15 respuestas esperadas en 5 ciclos de sueño |
 | C27 | Netns, cgroups, montajes y nftables antes y después | Las listas de antes y después de `anden up` y `anden down` son iguales y vacías |
+| C11 | `dig` desde el cliente externo | `web.anden.internal` da `10.81.0.2` en node1; tras dormirlo, moverlo a node2 y despertarlo da `10.82.0.2`, y la conexión a esa dirección funciona |
+| C12 | Suma de las 7 fases contra `wakeclient` | 100 despertares por ruta: 200 de 200 dentro de máx(5 ms, 10 %), en `relaunch` y en `restore` |
+| C13 | runc 1.5.2, crun y `criu restore` directo, n = 100 por fila | p50 / p90 / p99 / máx en ms. `anden-relaunch` 55.3 / 62.2 / 66.6 / 66.9 y `anden-restore` 33.6 / 37.0 / 40.0 / 40.5. `runc` 38.0 / 38.9 / 39.3 / 60.2, `crun` 46.7 / 47.8 / 79.3 / 79.3 y `criu-restore` 16.8 / 17.2 / 17.5 / 17.5. `relaunch` frente a runc y crun: comparable; `restore` frente a `criu restore`: equivalente en el mecanismo |
+| C14 | Petición inyectada mientras el servicio se duerme | 100 por ruta, 0 errores y 0 timeouts; 97 en `relaunch` y 96 en `restore` cayeron dentro de la transición |
 
-De K3 en adelante todavía no hay mediciones.
+De K4 en adelante todavía no hay mediciones.
 
 ## Uso
 
