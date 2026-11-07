@@ -14,6 +14,7 @@ import (
 
 	andenv1 "github.com/CesarManzoCode/anden/gen/anden/v1"
 	"github.com/CesarManzoCode/anden/internal/dns"
+	"github.com/CesarManzoCode/anden/internal/scheduler"
 	"github.com/CesarManzoCode/anden/internal/store"
 )
 
@@ -139,35 +140,45 @@ func specOf(svc store.Service) (*andenv1.ServiceSpec, error) {
 
 // place gives a node and an address to every awake service without an address,
 // and an address of its home to a sleeping one that moved, and records them in
-// services. A service that fits nowhere waits for a later pass; lost revision
-// races too.
+// services. The services without a node are placed together as one batch by
+// the scheduler of D07, over the ready nodes and on top of what the awake
+// services with a node already reserve. A service that fits nowhere waits for
+// a later pass; lost revision races too.
 func (r *Reconciler) place(ctx context.Context, services []store.Service) error {
 	nodes, err := r.state.ListNodes(ctx)
 	if err != nil {
 		return err
 	}
 	subnets := map[string]string{}
+	problem := scheduler.Problem{}
 	for _, n := range nodes {
 		subnets[n.Name] = n.Subnet
+		if r.ready(n.Name) {
+			problem.Nodes = append(problem.Nodes, scheduler.Node{Name: n.Name, CPUMillis: int64(n.CPUMillis), MemMiB: int64(n.MemoryMiB)})
+		}
 	}
-	reserved := map[string]resources{}
 	used := map[string]bool{}
-	needs := make([]resources, len(services))
-	for i, svc := range services {
+	for _, svc := range services {
+		if svc.DesiredAddr != "" {
+			used[svc.DesiredAddr] = true
+		}
+		// D07: only what is awake reserves; what sleeps reserves nothing.
+		if svc.Deleted || !svc.DesiredAwake || (svc.DesiredNode == "" && svc.DesiredAddr != "") {
+			continue
+		}
 		spec, err := specOf(svc)
 		if err != nil {
 			return err
 		}
-		needs[i] = resources{cpuMillis: int64(spec.GetCpuMillis()), memoryMiB: int64(spec.GetMemoryMib())}
-		if svc.DesiredAddr != "" {
-			used[svc.DesiredAddr] = true
-		}
-		// D07: only what is awake reserves.
-		if svc.DesiredNode != "" && svc.DesiredAwake && !svc.Deleted {
-			cur := reserved[svc.DesiredNode]
-			reserved[svc.DesiredNode] = resources{cur.cpuMillis + needs[i].cpuMillis, cur.memoryMiB + needs[i].memoryMiB}
-		}
+		problem.Services = append(problem.Services, scheduler.Service{
+			Name:              svc.Name,
+			CPUMillis:         int64(spec.GetCpuMillis()),
+			MemMiB:            int64(spec.GetMemoryMib()),
+			AntiAffinityGroup: spec.GetAntiAffinityGroup(),
+			Node:              svc.DesiredNode,
+		})
 	}
+	placement := scheduler.Solve(problem)
 	for i := range services {
 		svc := &services[i]
 		// What sleeps is placed only once it has a home: MoveService gives
@@ -177,7 +188,7 @@ func (r *Reconciler) place(ctx context.Context, services []store.Service) error 
 		}
 		node := svc.DesiredNode
 		if node == "" {
-			node = firstFit(needs[i], nodes, reserved, r.ready)
+			node = placement[svc.Name]
 		}
 		subnet, known := subnets[node]
 		if !known {
@@ -193,10 +204,6 @@ func (r *Reconciler) place(ctx context.Context, services []store.Service) error 
 		}
 		if !ok {
 			continue
-		}
-		if svc.DesiredNode == "" {
-			cur := reserved[node]
-			reserved[node] = resources{cur.cpuMillis + needs[i].cpuMillis, cur.memoryMiB + needs[i].memoryMiB}
 		}
 		svc.DesiredNode, svc.DesiredAddr = node, addr
 		used[addr] = true

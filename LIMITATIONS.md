@@ -55,7 +55,9 @@ Fuente única de lo que Andén no demuestra. Ningún otro archivo los repite.
 
 ## Plano de control
 
-- La colocación es provisional: el primer nodo listo con CPU y memoria libres. No hay anti-afinidad ni best-fit (K4), y un servicio que no cabe en ningún nodo se queda en `CREATING` sin error.
+- La colocación sigue D07 (filtro por CPU, memoria y anti-afinidad, y best-fit por recurso dominante en orden decreciente de tamaño), pero es una heurística: no garantiza el máximo de servicios colocados. Su brecha frente a la fuerza bruta de `placeopt` es la que reporta C15. Un servicio que no cabe en ningún nodo se queda en `CREATING` sin error.
+- El scheduler solo coloca lo que no tiene nodo. Un despertar sigue en su nodo hogar aunque ya no quepa: todavía no se elige otro nodo ni se mueve la dirección (D07).
+- `placeopt` recorre (k+1)^n asignaciones, no las 3^n que dice D07: maximizar los servicios colocados exige considerar dejar uno fuera. Solo acepta hasta 12 servicios.
 - Un nodo caído no recoloca sus servicios, y el agente no se autofencia todavía: sin plano de control sigue con lo que tiene.
 - `DeployService` para la instancia vieja y luego arranca la nueva, con tiempo sin servicio: todavía no sigue D24.
 - `MoveService` deja el servicio dormido en su nuevo hogar. Una instancia despierta no pasa por el volcado: se para, así que un servicio `restore` pierde su memoria al moverse y despierta en el nodo nuevo por `relaunch`.

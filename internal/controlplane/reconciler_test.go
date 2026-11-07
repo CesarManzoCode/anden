@@ -194,26 +194,32 @@ func twoNodes() []store.Node {
 	}
 }
 
-func TestFirstFit(t *testing.T) {
-	ready := func(string) bool { return true }
-	nodes := twoNodes()
-	if got := firstFit(resources{500, 500}, nodes, nil, ready); got != "node1" {
-		t.Errorf("empty nodes: %q", got)
+func TestPassSchedulesOnReadyNodesWithAntiAffinity(t *testing.T) {
+	grouped := func(cpu uint32) []byte {
+		raw, err := proto.Marshal(&andenv1.ServiceSpec{CpuMillis: cpu, MemoryMib: 100, Port: 80, AntiAffinityGroup: "g"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return raw
 	}
-	if got := firstFit(resources{500, 500}, nodes, map[string]resources{"node1": {600, 0}}, ready); got != "node2" {
-		t.Errorf("no CPU left on node1: %q", got)
+	nodes := append(twoNodes(), store.Node{Name: "node3", Subnet: "10.83.0.0/16", CPUMillis: 1000, MemoryMiB: 1000})
+	m := &memState{nodes: nodes, services: map[string]store.Service{
+		// Pinned on node2: it reserves there, so g1 cannot join it.
+		"g0": {Name: "g0", Revision: 1, DesiredAwake: true, DesiredNode: "node2", DesiredAddr: "10.82.0.2", State: stateActive, Spec: grouped(100)},
+		"g1": {Name: "g1", Revision: 1, DesiredAwake: true, State: stateCreating, Spec: grouped(100)},
+		"g2": {Name: "g2", Revision: 1, DesiredAwake: true, State: stateCreating, Spec: grouped(100)},
+	}}
+	r := NewReconciler(m)
+	r.ready = func(n string) bool { return n != "node1" }
+	if err := r.Pass(context.Background()); err != nil {
+		t.Fatal(err)
 	}
-	if got := firstFit(resources{500, 500}, nodes, map[string]resources{"node1": {0, 600}}, ready); got != "node2" {
-		t.Errorf("no memory left on node1: %q", got)
+	if got := m.services["g1"]; got.DesiredNode != "node3" || got.DesiredAddr != "10.83.0.2" {
+		t.Errorf("g1: %+v", got)
 	}
-	if got := firstFit(resources{1000, 1000}, nodes, nil, ready); got != "node1" {
-		t.Errorf("an exact fit fits: %q", got)
-	}
-	if got := firstFit(resources{1001, 1}, nodes, nil, ready); got != "" {
-		t.Errorf("too big: %q", got)
-	}
-	if got := firstFit(resources{1, 1}, nodes, nil, func(n string) bool { return n != "node1" }); got != "node2" {
-		t.Errorf("node1 is not ready: %q", got)
+	// node1 is not ready and node2 and node3 hold g: g2 waits.
+	if got := m.services["g2"]; got.DesiredNode != "" || got.DesiredAddr != "" {
+		t.Errorf("g2: %+v", got)
 	}
 }
 

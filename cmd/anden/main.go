@@ -22,6 +22,7 @@ const usage = `usage:
   anden svc get|sleep|wake|delete --name N [--state DIR] [--json]
   anden svc move --name N --node NODE [--state DIR] [--json]
   anden svc list [--state DIR] [--json]
+  anden placement solve --input FILE [--json]
 `
 
 func main() {
@@ -34,6 +35,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	if len(args) > 0 && args[0] == "svc" {
 		return runSvc(args[1:], stdout, stderr)
+	}
+	if len(args) > 0 && args[0] == "placement" {
+		return runPlacement(args[1:], stdout, stderr)
 	}
 	if len(args) > 0 {
 		switch args[0] {

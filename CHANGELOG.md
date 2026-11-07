@@ -1,5 +1,13 @@
 # Historial de cambios
 
+## K4: orquestación y fallos (en curso)
+
+### Agregado
+
+- El plano de control coloca con el scheduler de D07: filtra los nodos listos por CPU, memoria y grupo de anti-afinidad (`anti_affinity_group`), y elige por best-fit del recurso dominante, del servicio más grande al más pequeño. Dos servicios del mismo grupo no comparten nodo.
+- `anden placement solve --input FILE [--json]` corre el scheduler sobre una instancia en JSON, sin datacenter, y da el nodo de cada servicio o `null` si no cabe.
+- Criterio de aceptación C15 (`acceptance/c15_placement.py`), con la fuerza bruta `verify/cmd/placeopt` como comparación.
+
 ## K3: restauración, desglose por fases, descubrimiento y comparación (2026-11-07)
 
 ### Agregado
