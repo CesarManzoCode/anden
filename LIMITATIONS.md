@@ -53,6 +53,12 @@ Fuente única de lo que Andén no demuestra. Ningún otro archivo los repite.
 - `anden image import` no vuelve a leer un blob que el almacén ya tiene: la copia guardada solo se revisa al extraerla o con `anden image verify`.
 - Fuera del namespace del datacenter, `anden image mount` se reejecuta en un namespace de montaje propio y el montaje desaparece cuando el comando termina. Solo es útil dentro de un namespace que ya sea root, donde no hay reejecución.
 
+## Plano de control
+
+- El reconciliador por ahora solo persiste: calcula el estado observado a partir de lo que reportan los agentes, pero no les ordena nada. `MoveService` guarda el nodo deseado y no mueve el servicio.
+- La vigencia de un nodo vive en la memoria de `andend`, con su reloj monótono. Tras reiniciar `andend`, un nodo del que no se supo nada cuenta como visto en el arranque, así que se declara muerto 4 s después y no antes.
+- `GetService` y `ListServices` leen todas las instancias reportadas para armar la respuesta. No está medido cuánto cuesta eso con muchos servicios.
+
 ## Mediciones
 
 - Toda cifra vale para esta máquina (Ryzen 5 5600G, 14 GiB visibles, btrfs, gobernador `powersave`). No se compara con la de Railway como «más rápido»: la suya es de otra plataforma y de 2023.

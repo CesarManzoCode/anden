@@ -94,6 +94,16 @@ Fuentes primarias con su revisión fijada, consultadas el 6 nov 2026. Una págin
 | [image-spec, `layer.md`](https://github.com/opencontainers/image-spec/blob/v1.1.1/layer.md) | tag `v1.1.1` | «Whiteout files MUST only apply to resources in lower/parent layers»; lo que está en la misma capa solo lo ocultan whiteouts de capas posteriores |
 | Go, `src/archive/tar/reader.go`, `src/internal/godebugs/table.go` | go1.27.3 instalado | `Reader.Next` solo devuelve `ErrInsecurePath` con `GODEBUG=tarinsecurepath=0`; por defecto entrega el nombre tal cual y validarlo le toca a quien extrae. No valida destinos de enlaces |
 
+## API y estado (consultado el 6 nov 2026 para k2-01)
+
+| Fuente | Revisión | Dato usado |
+|---|---|---|
+| `make gen` ejecutado en esta máquina | protoc 36.1 (el encabezado generado dice `protoc v7.36.1`), `protoc-gen-go` v1.36.12, `protoc-gen-go-grpc` v1.6.2 | Genera `gen/anden/v1/anden.pb.go` y `anden_grpc.pb.go` con `paths=source_relative`; los campos `optional` de proto3 salen como punteros (`*uint32`) |
+| pgx, `pgconn/config.go` | `github.com/jackc/pgx/v5` v5.12.0 | Un `host` que empieza con `/` es un directorio de socket Unix y la dirección es `<dir>/.s.PGSQL.<puerto>`; los valores entre comillas simples admiten escapes con `\` |
+| pgx, `conn.go` | v5.12.0 | `Exec` sin argumentos usa siempre el protocolo simple, que acepta varias sentencias en una llamada; `BeginFunc` confirma o revierte la transacción |
+| grpc, `internal/resolver/unix/unix.go` | `google.golang.org/grpc` v1.85.0 | El destino `unix:///ruta/absoluta` toma la ruta del URL; una autoridad no vacía es error |
+| `go get` y `go mod tidy` | go1.27.3 | grpc v1.85.0 arrastra `golang.org/x/sys` v0.48.0 como indirecta; pgxpool necesita `github.com/jackc/puddle/v2` v2.2.3. El proxy de Go solo respondió por IPv4: con IPv6 dio `network is unreachable` |
+
 ## Documentación oficial sin revisión fija (consultada el 6 nov 2026)
 
 | Fuente | Dato |

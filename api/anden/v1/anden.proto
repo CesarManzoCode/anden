@@ -1,0 +1,209 @@
+// Published API of Andén (contract D23). Anden is the public service for
+// clients of the host; AgentControl is the internal service for node agents.
+syntax = "proto3";
+
+package anden.v1;
+
+option go_package = "github.com/CesarManzoCode/anden/gen/anden/v1;andenv1";
+
+service Anden {
+  rpc CreateService(CreateServiceRequest) returns (Service);
+  rpc GetService(GetServiceRequest) returns (Service);
+  rpc ListServices(ListServicesRequest) returns (ListServicesResponse);
+  rpc SleepService(SleepServiceRequest) returns (Service);
+  rpc WakeService(WakeServiceRequest) returns (Service);
+  rpc DeleteService(DeleteServiceRequest) returns (Service);
+  rpc DeployService(DeployServiceRequest) returns (Service);
+  rpc MoveService(MoveServiceRequest) returns (Service);
+  rpc ListNodes(ListNodesRequest) returns (ListNodesResponse);
+}
+
+service AgentControl {
+  rpc Register(RegisterRequest) returns (RegisterResponse);
+  rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+  rpc ReportInstances(ReportInstancesRequest) returns (ReportInstancesResponse);
+}
+
+enum ServiceState {
+  SERVICE_STATE_UNSPECIFIED = 0;
+  SERVICE_STATE_CREATING = 1;
+  SERVICE_STATE_ACTIVE = 2;
+  SERVICE_STATE_SLEEPING = 3;
+  SERVICE_STATE_ASLEEP = 4;
+  SERVICE_STATE_WAKING = 5;
+  SERVICE_STATE_FAILED = 6;
+}
+
+// WAKE_ROUTE_UNSPECIFIED means relaunch, the default of D03.
+enum WakeRoute {
+  WAKE_ROUTE_UNSPECIFIED = 0;
+  WAKE_ROUTE_RELAUNCH = 1;
+  WAKE_ROUTE_RESTORE = 2;
+}
+
+enum InstanceState {
+  INSTANCE_STATE_UNSPECIFIED = 0;
+  INSTANCE_STATE_STARTING = 1;
+  INSTANCE_STATE_RUNNING = 2;
+  INSTANCE_STATE_STOPPED = 3;
+  INSTANCE_STATE_FAILED = 4;
+}
+
+enum NodeState {
+  NODE_STATE_UNSPECIFIED = 0;
+  NODE_STATE_READY = 1;
+  NODE_STATE_DEAD = 2;
+}
+
+// Healthcheck is an HTTP GET of path, or a TCP connect when tcp is set.
+message Healthcheck {
+  oneof check {
+    string path = 1;
+    bool tcp = 2;
+  }
+}
+
+message Volume {
+  string name = 1;
+  string mount_path = 2;
+}
+
+message ServiceSpec {
+  string name = 1;
+  string image_digest = 2;
+  uint32 port = 3;
+  uint32 cpu_millis = 4;
+  uint32 memory_mib = 5;
+  // 0 means no limit.
+  uint32 pids_max = 6;
+  map<string, string> env = 7;
+  repeated string args = 8;
+  // Unset means 60; 0 means never sleep (D05).
+  optional uint32 idle_seconds = 9;
+  WakeRoute wake_route = 10;
+  bool singleton = 11;
+  string anti_affinity_group = 12;
+  Healthcheck healthcheck = 13;
+  // Unset means the defaults of D12: 60, 20 and 20.
+  optional uint32 healthcheck_timeout_seconds = 14;
+  optional uint32 overlap_seconds = 15;
+  optional uint32 draining_seconds = 16;
+  // Not allowed with WAKE_ROUTE_RESTORE (D03).
+  repeated Volume volumes = 17;
+}
+
+message Instance {
+  string id = 1;
+  string node = 2;
+  string addr = 3;
+  uint64 version = 4;
+  uint64 generation = 5;
+  InstanceState state = 6;
+  // False when the instance runs without its seccomp filter (D19).
+  bool seccomp = 7;
+  // Route used by the last wake: "relaunch" or "restore".
+  string route = 8;
+}
+
+message Service {
+  ServiceSpec spec = 1;
+  ServiceState state = 2;
+  uint64 version = 3;
+  string node = 4;
+  string addr = 5;
+  uint32 edge_port = 6;
+  Instance instance = 7;
+}
+
+message CreateServiceRequest {
+  ServiceSpec spec = 1;
+}
+
+message GetServiceRequest {
+  string name = 1;
+}
+
+message ListServicesRequest {}
+
+message ListServicesResponse {
+  repeated Service services = 1;
+}
+
+message SleepServiceRequest {
+  string name = 1;
+}
+
+message WakeServiceRequest {
+  string name = 1;
+}
+
+message DeleteServiceRequest {
+  string name = 1;
+}
+
+// DeployService replaces the spec of spec.name with a new version (D24).
+message DeployServiceRequest {
+  ServiceSpec spec = 1;
+}
+
+message MoveServiceRequest {
+  string name = 1;
+  string node = 2;
+}
+
+message Node {
+  string name = 1;
+  NodeState state = 2;
+  uint64 epoch = 3;
+  string addr = 4;
+  uint32 cpu_millis = 5;
+  uint32 memory_mib = 6;
+}
+
+message ListNodesRequest {}
+
+message ListNodesResponse {
+  repeated Node nodes = 1;
+}
+
+message RegisterRequest {
+  string node = 1;
+  string addr = 2;
+  uint32 cpu_millis = 3;
+  uint32 memory_mib = 4;
+}
+
+message RegisterResponse {
+  uint64 epoch = 1;
+  uint32 lease_ttl_ms = 2;
+  uint32 heartbeat_interval_ms = 3;
+}
+
+message HeartbeatRequest {
+  string node = 1;
+  uint64 epoch = 2;
+}
+
+message HeartbeatResponse {
+  uint32 lease_ttl_ms = 1;
+}
+
+message InstanceReport {
+  string id = 1;
+  string service = 2;
+  uint64 version = 3;
+  uint64 generation = 4;
+  InstanceState state = 5;
+  string addr = 6;
+  bool seccomp = 7;
+  string route = 8;
+}
+
+// ReportInstances replaces everything known about the instances of node.
+message ReportInstancesRequest {
+  string node = 1;
+  uint64 epoch = 2;
+  repeated InstanceReport instances = 3;
+}
+
+message ReportInstancesResponse {}
