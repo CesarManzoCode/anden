@@ -1,5 +1,43 @@
 # Historial de cambios
 
+## K2: datacenter, API y despertar por relanzamiento (2026-11-06)
+
+### Agregado
+
+- API gRPC publicada en `api/anden/v1/anden.proto`, con el código Go generado en `gen/anden/v1/`: servicio `Anden` para clientes y `AgentControl` para los agentes de nodo.
+- `andend`, el plano de control: responde la API en un socket Unix y en TCP, guarda el estado en PostgreSQL por socket Unix y migra el esquema al arrancar. `restore` con volúmenes se rechaza con `FAILED_PRECONDITION`.
+- `anden svc create|get|list|sleep|wake|delete|deploy|move`, que envuelve la API.
+- `anden up`, `down`, `status`, `exec` y `chaos kill`: levantan y destruyen el datacenter simulado (scope de systemd delegado, Postgres, namespace de usuario con el plano de control, tres nodos y un cliente), corren un comando en el netns de un nodo, del cliente o raíz, y tiran un nodo con `cgroup.kill`.
+- Criterio de aceptación C27 (`acceptance/c27_lifecycle.py`): ciclo de vida sin rastro.
+- `anden-agent`, el agente de nodo: se registra, late cada 500 ms y arranca y para instancias según lo que pide el plano de control. Cada instancia tiene cgroup, overlay, `resolv.conf`, namespaces de red, UTS e IPC propios, veth a `svc0` con su IP, los límites de su `ServiceSpec` y el filtro seccomp; su salida queda en `/.anden/stdio.log`. Las capas que le faltan al nodo llegan por HTTP desde `andend`, con su digest verificado.
+- `andend` coloca los servicios en el primer nodo con capacidad, les asigna una IP, sirve blobs en `10.80.0.1:7444` y programa el borde: cada servicio responde en `10.80.0.2:<edge_port>`. El simulador reinicia `andend` si muere, y las instancias siguen corriendo.
+- `WakeService` reemplaza una instancia en `FAILED`; `DeployService` y `MoveService` paran la instancia y arrancan otra.
+- `echosvc` responde a `/hog`, `/fork` y `/burn`, que exceden a propósito sus límites.
+- Criterios de aceptación C2 (`acceptance/c02_durability.py`), C4 (`c04_memory.py`) y C5 (`c05_pids_cpu.py`).
+- Un servicio con `idle_seconds` mayor que 0 se duerme solo tras esa ventana sin conexiones ni tráfico saliente: sus procesos terminan, se liberan su red y su overlay, y devuelve su memoria. `SleepService` sigue el mismo camino y espera a que no queden conexiones vivas.
+- Una conexión a un servicio dormido lo despierta por la ruta `relaunch` y queda retenida hasta que responde, en cualquier puerto TCP. `WakeService` sigue el mismo camino.
+- Criterio de aceptación C7 (`acceptance/c07_sleep.py`).
+- Los volúmenes de `ServiceSpec` se montan: cada uno es un directorio del nodo que sobrevive a dormir y despertar. Un nombre de volumen con `/`, `.` o `..` se rechaza con `INVALID_ARGUMENT`.
+- `wakeclient`, cliente externo de medición: `measure`, `load` y `sample`. `apiclient` espera a que cada operación se asiente y reporta el código gRPC numérico.
+- Criterios de aceptación C1 (`acceptance/c01_api.py`), C8 (`c08_warm.py` y `c08_cold.py`), C9 (`c09_no_loss.py`) y C10 (`c10_tcp.py`).
+
+### Corregido
+
+- Las respuestas al cliente externo vuelven por el netns raíz: cada nodo tiene una ruta `/32` hacia `10.80.0.100`. Sin ella, ninguna petición por el borde recibía respuesta.
+- `memory.reclaim` se escribe sin el poller de Go. Con `EAGAIN` del kernel, `os.WriteFile` no regresaba y el servicio se quedaba en `SLEEPING`.
+- El informe de C5 conserva su objeto `cpu`; el modelo de CPU va en `cpu_model`.
+
+### Medido
+
+- El cliente generado de la API crea, consulta, duerme, despierta y borra un servicio (C1).
+- El estado de la API y los procesos de las instancias no cambian tras matar `andend` con SIGKILL (C2).
+- Un servicio que excede su memoria muere dentro de su cgroup, una bomba de fork se detiene en `pids.max` y la cuota de CPU se respeta, sin errores en los demás servicios (C4, C5).
+- Un servicio inactivo se queda sin procesos y devuelve su memoria (C7).
+- Un despertar por `relaunch` en caché tibia responde con p99 de 63.3 ms, en 300 muestras (C8). La medición en caché fría no se hizo: falta `sudo -n`.
+- Ninguna de 1600 peticiones concurrentes sobre un servicio dormido se pierde ni se duplica (C9).
+- `redis-cli` sin configuración especial duerme y despierta Valkey (C10).
+- `anden up` y `anden down` dejan iguales las listas de netns, cgroups, montajes y nftables (C27).
+
 ## K1: runtime OCI y almacén de imágenes (2026-11-06)
 
 ### Agregado
@@ -21,32 +59,9 @@
 
 ### Agregado
 
-- API gRPC publicada en `api/anden/v1/anden.proto`, con el código Go generado en `gen/anden/v1/`: servicio `Anden` para clientes y `AgentControl` para los agentes de nodo.
-- `andend`, el plano de control: responde la API en un socket Unix y en TCP, guarda el estado en PostgreSQL por socket Unix y migra el esquema al arrancar. `restore` con volúmenes se rechaza con `FAILED_PRECONDITION`.
-- `anden svc create|get|list|sleep|wake|delete|deploy|move`, que envuelve la API.
-- `anden up`, `down`, `status`, `exec` y `chaos kill`: levantan y destruyen el datacenter simulado (scope de systemd delegado, Postgres, namespace de usuario con el plano de control, tres nodos y un cliente), corren un comando en el netns de un nodo, del cliente o raíz, y tiran un nodo con `cgroup.kill`.
-- Criterio de aceptación C27 (`acceptance/c27_lifecycle.py`): ciclo de vida sin rastro.
-- `anden-agent`, el agente de nodo: se registra, late cada 500 ms y arranca y para instancias según lo que pide el plano de control. Cada instancia tiene cgroup, overlay, `resolv.conf`, namespaces de red, UTS e IPC propios, veth a `svc0` con su IP, los límites de su `ServiceSpec` y el filtro seccomp; su salida queda en `/.anden/stdio.log`. Las capas que le faltan al nodo llegan por HTTP desde `andend`, con su digest verificado.
-- `andend` coloca los servicios en el primer nodo con capacidad, les asigna una IP, sirve blobs en `10.80.0.1:7444` y programa el borde: cada servicio responde en `10.80.0.2:<edge_port>`. El simulador reinicia `andend` si muere, y las instancias siguen corriendo.
-- `WakeService` reemplaza una instancia en `FAILED`; `DeployService` y `MoveService` paran la instancia y arrancan otra.
-- `echosvc` responde a `/hog`, `/fork` y `/burn`, que exceden a propósito sus límites.
-- Criterios de aceptación C2 (`acceptance/c02_durability.py`), C4 (`c04_memory.py`) y C5 (`c05_pids_cpu.py`).
-- Un servicio con `idle_seconds` mayor que 0 se duerme solo tras esa ventana sin conexiones ni tráfico saliente: sus procesos terminan, se liberan su red y su overlay, y devuelve su memoria. `SleepService` sigue el mismo camino y espera a que no queden conexiones vivas.
-- Una conexión a un servicio dormido lo despierta por la ruta `relaunch` y queda retenida hasta que responde, en cualquier puerto TCP. `WakeService` sigue el mismo camino.
-- Criterio de aceptación C7 (`acceptance/c07_sleep.py`).
-- Los volúmenes de `ServiceSpec` se montan: cada uno es un directorio del nodo que sobrevive a dormir y despertar. Un nombre de volumen con `/`, `.` o `..` se rechaza con `INVALID_ARGUMENT`.
-- `wakeclient`, cliente externo de medición: `measure`, `load` y `sample`. `apiclient` espera a que cada operación se asiente y reporta el código gRPC numérico.
-- Criterios de aceptación C1 (`acceptance/c01_api.py`), C8 (`c08_warm.py` y `c08_cold.py`), C9 (`c09_no_loss.py`) y C10 (`c10_tcp.py`).
-
 - Contrato del sistema, con decisiones cerradas de lenguaje, arquitectura, rutas de despertar, proxy, simulador, colocación y fencing.
 - Investigación con fuentes primarias y versiones de herramientas verificadas en la máquina de destino.
 - Comando único de chequeo (`make check`) y CI que lo corre.
-
-### Corregido
-
-- Las respuestas al cliente externo vuelven por el netns raíz: cada nodo tiene una ruta `/32` hacia `10.80.0.100`. Sin ella, ninguna petición por el borde recibía respuesta.
-- `memory.reclaim` se escribe sin el poller de Go. Con `EAGAIN` del kernel, `os.WriteFile` no regresaba y el servicio se quedaba en `SLEEPING`.
-- El informe de C5 conserva su objeto `cpu`; el modelo de CPU va en `cpu_model`.
 
 ### Decisiones
 

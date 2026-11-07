@@ -98,6 +98,7 @@ Fuente única de lo que Andén no demuestra. Ningún otro archivo los repite.
 - `anden chaos` solo implementa `kill` por ahora; `partition`, `heal` y `slow` no existen todavía.
 - Los procesos de `anden exec` entran al namespace de usuario y de red, no al de montaje del datacenter: ven los montajes del host.
 - Solo el cliente externo y el netns raíz llegan al borde. Desde un nodo, una conexión a `10.80.0.2` agota el tiempo, incluso hacia un servicio de ese mismo nodo: la respuesta del servicio no pasa por el netns raíz y el DNAT no se deshace. Cada nodo tiene una ruta `/32` hacia el cliente para resolver esto solo para el cliente.
+- Con esa ruta, el netns raíz emite redirecciones ICMP (`IcmpOutRedirects`) que el cliente no cuenta. No se investigó por qué.
 
 ## Mediciones
 
@@ -118,7 +119,16 @@ Fuente única de lo que Andén no demuestra. Ningún otro archivo los repite.
 - C8 en caché fría solo existe si `sudo -n` funciona en la corrida. `drop_caches` vacía la caché de toda la máquina, no solo la del servicio.
 - C9 mide HTTP con `echosvc`: 32 clientes, 5 rondas y una conexión por petición. No mide conexiones que transfieran mucho ni que vivan mucho durante el despertar.
 - C10 solo mide `PING`, `SET` y `GET` de `redis-cli` contra Valkey, con conexiones nuevas y sin persistencia: un `SET` no sobrevive al sueño con `relaunch`, y no se mide un servicio TCP con persistencia.
+- Cada cifra de K2 sale de una sola corrida sobre un solo árbol. No se midió cuánto varía entre corridas.
+- K2 cerró sin cifra de C8 en caché fría: `sudo -n` no estaba disponible.
+- C1 recorre una vez el camino esperado con un solo servicio. `DeleteService` responde con el último estado (`ACTIVE`, no un estado de borrado), y C1 solo comprueba el código de esa llamada y el `NotFound` posterior: no mide que la instancia haya terminado.
+- C2 mata `andend` una vez, con 3 servicios activos y sin operaciones en curso. No mide la caída de Postgres ni de un agente, ni un SIGKILL durante un despertar o con servicios dormidos.
+- C4 mide un solo servicio con `memory.max` de 64 MiB que pide 1024 MiB, con otros dos bajo carga. No mide presión de memoria en todo el nodo ni en la máquina.
+- C5 mide una bomba de fork con `pids.max` de 64, y la cuota de CPU con media CPU en una sola ventana de 5 s.
+- C7 mide un `echosvc` y un solo sueño por inactividad. `memory.reclaim` puede responder `EAGAIN` sin liberar todo; el agente no lo trata como error, y lo que queda se ve solo en `memory.current`. La cifra de C7 vale para ese servicio, no para uno con más memoria.
+- C8 despierta un servicio a la vez y cada muestra se duerme con `SleepService`, no por inactividad.
+- C27 sube y destruye un datacenter sin servicios: no hay instancias, overlays, volúmenes ni elementos en el set `sleeping` que limpiar. Su lista de montajes lee el `mountinfo` del host, donde no aparecen los montajes del namespace privado del datacenter (`during` da vacío), así que no dice nada sobre esos montajes.
 
 ## Sin demostrar todavía
 
-Todo lo que sigue a K1: datacenter, API, despertar, descubrimiento, colocación, rollouts, observabilidad y densidad. Esta sección se reduce conforme cada K cierre.
+Todo lo que sigue a K2: ruta `restore`, desglose por fases, descubrimiento, comparación con otros runtimes, colocación, rollouts, caída y partición, observabilidad y densidad. Esta sección se reduce conforme cada K cierre.
