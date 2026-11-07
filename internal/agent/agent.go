@@ -25,6 +25,7 @@ import (
 
 	andenv1 "github.com/CesarManzoCode/anden/gen/anden/v1"
 	"github.com/CesarManzoCode/anden/internal/image"
+	"github.com/CesarManzoCode/anden/internal/wake"
 )
 
 const (
@@ -34,6 +35,9 @@ const (
 	// was asked and looks for instances that died.
 	reconcileInterval = 100 * time.Millisecond
 	cgroupRoot        = "/sys/fs/cgroup"
+	// sleepRetry is how long to wait after a sleep aborted by a live socket
+	// before an order to sleep tries again.
+	sleepRetry = time.Second
 )
 
 // Config is the command line of the agent.
@@ -56,6 +60,10 @@ type Agent struct {
 	bits    int
 	dns     string
 	client  *http.Client
+	nft     *wake.NFT
+	proxy   *wake.Proxy
+	// beatNow asks for a heartbeat without waiting for the tick.
+	beatNow chan struct{}
 	// imageMu serializes transfers and overlay mounts, because a mount extracts
 	// the layers it lacks: two instances of one image would extract them twice.
 	imageMu sync.Mutex
@@ -63,7 +71,10 @@ type Agent struct {
 	mu        sync.Mutex
 	desired   []*andenv1.Assignment
 	instances map[string]*instance
-	blobsURL  string
+	// intents are what this node decided and the control plane does not know
+	// yet, by instance id. They win over desired until it does.
+	intents  map[string]*intent
+	blobsURL string
 	// changes counts what happened to instances, to know when to report.
 	changes uint64
 }
@@ -95,13 +106,29 @@ func New(cfg Config) (*Agent, error) {
 		bits:      prefix.Bits(),
 		dns:       dns,
 		client:    &http.Client{Transport: &http.Transport{DisableKeepAlives: true}},
+		nft:       wake.NewNFT(),
+		proxy:     wake.NewProxy(),
+		beatNow:   make(chan struct{}, 1),
 		instances: map[string]*instance{},
+		intents:   map[string]*intent{},
 	}, nil
 }
 
 // Run keeps the heartbeat and the reconcile loop going until ctx ends. If the
 // control plane is gone the instances keep running as they are.
 func (a *Agent) Run(ctx context.Context) error {
+	if err := a.nft.Setup(); err != nil {
+		return err
+	}
+	ln, err := wake.Listen(ctx)
+	if err != nil {
+		return err
+	}
+	go func() {
+		if err := a.proxy.Serve(ctx, ln); err != nil {
+			log.Printf("wake proxy: %v", err)
+		}
+	}()
 	// The short backoff lets the agent find a restarted andend within the 4 s
 	// after which it would count the node as dead.
 	conn, err := grpc.NewClient("passthrough:///"+a.cfg.Control,
@@ -132,6 +159,7 @@ func (a *Agent) Run(ctx context.Context) error {
 		case <-ctx.Done():
 			return nil
 		case <-tick.C:
+		case <-a.beatNow:
 		}
 	}
 }
@@ -164,12 +192,22 @@ func (a *Agent) beat(ctx context.Context, s *session) error {
 		a.mu.Unlock()
 		log.Printf("registered as %s, epoch %d", a.cfg.Node, s.epoch)
 	}
+	// Intents go first, so a report of what they caused finds them applied.
+	settled, err := a.sendIntents(ctx, s)
+	if err != nil {
+		return a.refused(s, err)
+	}
 	resp, err := s.client.Heartbeat(ctx, &andenv1.HeartbeatRequest{Node: a.cfg.Node, Epoch: s.epoch})
 	if err != nil {
 		return a.refused(s, err)
 	}
 	a.mu.Lock()
 	a.desired = resp.GetAssignments()
+	for _, sent := range settled {
+		if a.intents[sent.id] == sent {
+			delete(a.intents, sent.id)
+		}
+	}
 	a.mu.Unlock()
 
 	changes, reports := a.snapshot()
@@ -200,6 +238,10 @@ func (a *Agent) snapshot() (uint64, []*andenv1.InstanceReport) {
 	defer a.mu.Unlock()
 	reports := make([]*andenv1.InstanceReport, 0, len(a.instances))
 	for _, in := range a.instances {
+		// Asleep there is no instance to report: the node only keeps its place.
+		if in.state == andenv1.InstanceState_INSTANCE_STATE_STOPPED {
+			continue
+		}
 		reports = append(reports, &andenv1.InstanceReport{
 			Id: in.id, Service: in.service, Version: in.version, Generation: in.generation,
 			State: in.state, Addr: in.addr, Seccomp: in.seccomp, Route: in.route,
@@ -219,29 +261,179 @@ func (a *Agent) reconcileLoop(ctx context.Context) {
 		}
 		a.reconcile(ctx)
 		a.watchInstances()
+		a.watchIdle(time.Now())
 	}
 }
 
-// reconcile starts and stops what diff says. Each action runs on its own
-// goroutine: an image transfer must not delay anything else.
+// reconcile starts, stops, sleeps and wakes what the comparison says. Each action
+// runs on its own goroutine: an image transfer must not delay anything else.
 func (a *Agent) reconcile(ctx context.Context) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	desired := a.effective()
 	have := make(map[string]local, len(a.instances))
 	for id, in := range a.instances {
 		have[id] = local{service: in.service, stopping: in.stopping}
 	}
-	start, stop := diff(a.desired, have)
+	awake := make(map[string]bool, len(desired))
+	for _, as := range desired {
+		awake[as.GetInstanceId()] = as.GetAwake()
+		// Only from Asleep: a sleep under way that has not told anyone yet
+		// must not read as a wake.
+		if in := a.instances[as.GetInstanceId()]; in != nil && as.GetAwake() && !in.stopping && in.machine.State() == wake.Asleep {
+			in.machine.Wake()
+		}
+	}
+	start, stop := diff(desired, have)
 	for _, id := range stop {
 		in := a.instances[id]
-		in.stopping = true
-		go a.stop(in)
+		isAwake, assigned := awake[id]
+		switch sleepAction(assigned && !isAwake, in.machine.State(), in.state) {
+		case actionSleep:
+			if now := time.Now(); !now.Before(in.sleepAfter) {
+				in.sleepAfter = now.Add(sleepRetry)
+				go a.sleep(in)
+			}
+		case actionStop:
+			in.stopping = true
+			go a.stop(in)
+		}
 	}
 	for _, as := range start {
-		in := a.newInstance(ctx, as)
+		in, err := a.newInstance(ctx, as, false)
+		if err != nil {
+			log.Printf("instance %s: %v", as.GetInstanceId(), err)
+			continue
+		}
 		a.instances[in.id] = in
+		a.proxy.Register(in.machine)
 		a.changes++
 		go a.start(in, as)
+	}
+	for _, as := range dormant(desired, have) {
+		in, err := a.newInstance(ctx, as, true)
+		if err != nil {
+			log.Printf("instance %s: %v", as.GetInstanceId(), err)
+			continue
+		}
+		a.instances[in.id] = in
+		a.proxy.Register(in.machine)
+		go func() {
+			if err := in.machine.Settle(); err != nil {
+				log.Printf("instance %s: %v", in.id, err)
+			}
+		}()
+	}
+}
+
+// intent is a change of desired state this node made on its own: a connection
+// woke a service or its idle window ended. sent says the control plane has it.
+type intent struct {
+	id         string
+	service    string
+	generation uint64
+	awake      bool
+	sent       bool
+}
+
+// effective is desired with the intents the control plane has not reflected yet.
+func (a *Agent) effective() []*andenv1.Assignment {
+	out := make([]*andenv1.Assignment, 0, len(a.desired))
+	for _, as := range a.desired {
+		if it := a.intents[as.GetInstanceId()]; it != nil && it.awake != as.GetAwake() {
+			as = &andenv1.Assignment{InstanceId: as.GetInstanceId(), Spec: as.GetSpec(), Version: as.GetVersion(),
+				Generation: as.GetGeneration(), Addr: as.GetAddr(), Awake: it.awake}
+		}
+		out = append(out, as)
+	}
+	return out
+}
+
+// declare records that in should be awake or not, if that is news.
+func (a *Agent) declare(in *instance, awake bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.intents[in.id] == nil {
+		for _, as := range a.desired {
+			if as.GetInstanceId() == in.id && as.GetAwake() == awake {
+				return
+			}
+		}
+	}
+	a.intents[in.id] = &intent{id: in.id, service: in.service, generation: in.generation, awake: awake}
+	select {
+	case a.beatNow <- struct{}{}:
+	default:
+	}
+}
+
+// sendIntents tells the control plane what the node decided. It returns the ones
+// it already has: a heartbeat asked for after this reflects them, so they can go.
+func (a *Agent) sendIntents(ctx context.Context, s *session) ([]*intent, error) {
+	a.mu.Lock()
+	pending := make([]*intent, 0, len(a.intents))
+	for _, it := range a.intents {
+		pending = append(pending, it)
+	}
+	a.mu.Unlock()
+	for _, it := range pending {
+		if it.sent {
+			continue
+		}
+		_, err := s.client.SetAwake(ctx, &andenv1.SetAwakeRequest{Node: a.cfg.Node, Epoch: s.epoch, Service: it.service,
+			Generation: it.generation, Awake: it.awake})
+		if err != nil {
+			return nil, err
+		}
+		it.sent = true
+	}
+	return pending, nil
+}
+
+// sleep takes an instance to sleep. It is the only way there: an order from the
+// control plane and the idle signal both end here.
+func (a *Agent) sleep(in *instance) {
+	err := in.machine.Sleep()
+	if err == nil || errors.Is(err, wake.ErrNotActive) {
+		return
+	}
+	if !errors.Is(err, wake.ErrBusy) {
+		log.Printf("instance %s: sleep: %v", in.id, err)
+	}
+	now := time.Now()
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	in.sleepAfter = now.Add(sleepRetry)
+	if in.idle != nil {
+		in.idle.Touch(now)
+	}
+}
+
+// watchIdle samples each running instance at a quarter of its window and takes
+// to sleep the ones that have spent the whole window inactive (D05).
+func (a *Agent) watchIdle(now time.Time) {
+	a.mu.Lock()
+	due := make([]*instance, 0, len(a.instances))
+	for _, in := range a.instances {
+		if in.idle != nil && in.state == andenv1.InstanceState_INSTANCE_STATE_RUNNING && !in.stopping &&
+			!now.Before(in.nextSample) && in.machine.State() == wake.Active {
+			in.nextSample = now.Add(in.idle.Interval())
+			due = append(due, in)
+		}
+	}
+	a.mu.Unlock()
+	for _, in := range due {
+		sockets, tx, err := readActivity(in.paths.cgroup)
+		if err != nil {
+			log.Printf("instance %s: %v", in.id, err)
+			continue
+		}
+		a.mu.Lock()
+		idle := in.idle.Observe(now, sockets, tx)
+		a.mu.Unlock()
+		if idle {
+			go a.sleep(in)
+		}
 	}
 }
 
@@ -250,7 +442,8 @@ func (a *Agent) watchInstances() {
 	a.mu.Lock()
 	running := make([]*instance, 0, len(a.instances))
 	for _, in := range a.instances {
-		if in.state == andenv1.InstanceState_INSTANCE_STATE_RUNNING && !in.stopping {
+		// Outside Active the processes are expected to come and go.
+		if in.state == andenv1.InstanceState_INSTANCE_STATE_RUNNING && !in.stopping && in.machine.State() == wake.Active {
 			running = append(running, in)
 		}
 	}

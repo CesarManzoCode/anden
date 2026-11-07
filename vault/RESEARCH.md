@@ -132,6 +132,18 @@ Fuentes primarias con su revisión fijada, consultadas el 6 nov 2026. Una págin
 | `/sys/fs/cgroup/.../memory.swap.max`, `/proc/swaps` | kernel 7.2.14 | El archivo existe en la cgroup del usuario y la máquina tiene swap en `/dev/zram0`, de ahí que una instancia lo ponga en 0 para que exceder `memory.max` termine en OOM |
 | Go, `net/http.ServeMux` (`go doc`) | go1.27.3 | Patrones con método y comodín, y `Request.PathValue` |
 
+## Proxy de despertar (consultado el 6 nov 2026 para k2-04)
+
+| Fuente | Revisión | Dato usado |
+|---|---|---|
+| `nft -f -`, ejecutado en un namespace de usuario y de red | nftables 1.1.7 | `table inet anden_wake` con el set concatenado y `redirect to :15000` en `prerouting` y `output` se puede declarar dos veces seguidas. `add element` repetido no falla; `delete element` de lo que no está falla con `No such file or directory`, por eso la máquina recuerda si el destino está en el set |
+| Conexiones reales con Python, en ese namespace | kernel 7.2.14 | Con `10.81.0.3 . 8080` en el set, un `connect` desde el mismo netns llega a `:15000` y `getsockopt(SOL_IP, 80)` devuelve 16 bytes `02001f900a510003...`: familia en orden del host, puerto y dirección en orden de red. Con `SO_MARK = 0x414e` y la regla `meta mark 0x414e return` antes de la de D04, el `connect` llega al servicio real. Sin esa regla, el sondeo y el puente del propio agente volverían al proxy, porque salen por `output`; D04 no lo menciona |
+| `ip -batch -`, ejecutado | iproute2 7.3.0 | `link set eth0 address 02:00:0a:51:00:02` y `link set eth0 addrgenmode none`, antes de `up`, dejan la MAC fija y ninguna dirección IPv6 en `eth0` |
+| `/proc/self/net/tcp` y `/proc/self/net/dev`, leídos | kernel 7.2.14 | La cuarta columna de `tcp` es el estado en hexadecimal (`0A` = `LISTEN`), tras una línea de encabezado. En `dev`, tras dos líneas de encabezado y `nombre:`, hay ocho columnas de recepción, y luego bytes y paquetes transmitidos |
+| Go, `go doc` | go1.27.3 | `net.ListenConfig.SetMultipathTCP(false)` vence el MPTCP que Go activa por defecto en los listeners; `syscall.SO_MARK` existe |
+
+Lo no medido aquí: la cifra de 2 ms de sondeo es el intervalo pedido por D04, no una latencia observada. Los códigos de estado distintos de `LISTEN` se tomaron de `include/net/tcp_states.h` sin observarlos uno por uno. Que la MAC fija evite una espera por caché ARP al despertar es hipótesis: se razonó por el funcionamiento de NUD, no se comparó contra una MAC nueva.
+
 ## Documentación oficial sin revisión fija (consultada el 6 nov 2026)
 
 | Fuente | Dato |

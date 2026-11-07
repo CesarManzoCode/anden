@@ -1839,6 +1839,121 @@ func (*ReportInstancesResponse) Descriptor() ([]byte, []int) {
 	return file_anden_v1_anden_proto_rawDescGZIP(), []int{24}
 }
 
+// SetAwake records what the node decided alone: that an idle service went to
+// sleep, or that a connection woke a sleeping one. It is ignored if generation
+// is no longer the service's on this node.
+type SetAwakeRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Node          string                 `protobuf:"bytes,1,opt,name=node,proto3" json:"node,omitempty"`
+	Epoch         uint64                 `protobuf:"varint,2,opt,name=epoch,proto3" json:"epoch,omitempty"`
+	Service       string                 `protobuf:"bytes,3,opt,name=service,proto3" json:"service,omitempty"`
+	Generation    uint64                 `protobuf:"varint,4,opt,name=generation,proto3" json:"generation,omitempty"`
+	Awake         bool                   `protobuf:"varint,5,opt,name=awake,proto3" json:"awake,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SetAwakeRequest) Reset() {
+	*x = SetAwakeRequest{}
+	mi := &file_anden_v1_anden_proto_msgTypes[25]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SetAwakeRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SetAwakeRequest) ProtoMessage() {}
+
+func (x *SetAwakeRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_anden_v1_anden_proto_msgTypes[25]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SetAwakeRequest.ProtoReflect.Descriptor instead.
+func (*SetAwakeRequest) Descriptor() ([]byte, []int) {
+	return file_anden_v1_anden_proto_rawDescGZIP(), []int{25}
+}
+
+func (x *SetAwakeRequest) GetNode() string {
+	if x != nil {
+		return x.Node
+	}
+	return ""
+}
+
+func (x *SetAwakeRequest) GetEpoch() uint64 {
+	if x != nil {
+		return x.Epoch
+	}
+	return 0
+}
+
+func (x *SetAwakeRequest) GetService() string {
+	if x != nil {
+		return x.Service
+	}
+	return ""
+}
+
+func (x *SetAwakeRequest) GetGeneration() uint64 {
+	if x != nil {
+		return x.Generation
+	}
+	return 0
+}
+
+func (x *SetAwakeRequest) GetAwake() bool {
+	if x != nil {
+		return x.Awake
+	}
+	return false
+}
+
+type SetAwakeResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SetAwakeResponse) Reset() {
+	*x = SetAwakeResponse{}
+	mi := &file_anden_v1_anden_proto_msgTypes[26]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SetAwakeResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SetAwakeResponse) ProtoMessage() {}
+
+func (x *SetAwakeResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_anden_v1_anden_proto_msgTypes[26]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SetAwakeResponse.ProtoReflect.Descriptor instead.
+func (*SetAwakeResponse) Descriptor() ([]byte, []int) {
+	return file_anden_v1_anden_proto_rawDescGZIP(), []int{26}
+}
+
 var File_anden_v1_anden_proto protoreflect.FileDescriptor
 
 const file_anden_v1_anden_proto_rawDesc = "" +
@@ -1977,7 +2092,16 @@ const file_anden_v1_anden_proto_rawDesc = "" +
 	"\x04node\x18\x01 \x01(\tR\x04node\x12\x14\n" +
 	"\x05epoch\x18\x02 \x01(\x04R\x05epoch\x126\n" +
 	"\tinstances\x18\x03 \x03(\v2\x18.anden.v1.InstanceReportR\tinstances\"\x19\n" +
-	"\x17ReportInstancesResponse*\xcd\x01\n" +
+	"\x17ReportInstancesResponse\"\x8b\x01\n" +
+	"\x0fSetAwakeRequest\x12\x12\n" +
+	"\x04node\x18\x01 \x01(\tR\x04node\x12\x14\n" +
+	"\x05epoch\x18\x02 \x01(\x04R\x05epoch\x12\x18\n" +
+	"\aservice\x18\x03 \x01(\tR\aservice\x12\x1e\n" +
+	"\n" +
+	"generation\x18\x04 \x01(\x04R\n" +
+	"generation\x12\x14\n" +
+	"\x05awake\x18\x05 \x01(\bR\x05awake\"\x12\n" +
+	"\x10SetAwakeResponse*\xcd\x01\n" +
 	"\fServiceState\x12\x1d\n" +
 	"\x19SERVICE_STATE_UNSPECIFIED\x10\x00\x12\x1a\n" +
 	"\x16SERVICE_STATE_CREATING\x10\x01\x12\x18\n" +
@@ -2010,11 +2134,12 @@ const file_anden_v1_anden_proto_rawDesc = "" +
 	"\rDeleteService\x12\x1e.anden.v1.DeleteServiceRequest\x1a\x11.anden.v1.Service\x12B\n" +
 	"\rDeployService\x12\x1e.anden.v1.DeployServiceRequest\x1a\x11.anden.v1.Service\x12>\n" +
 	"\vMoveService\x12\x1c.anden.v1.MoveServiceRequest\x1a\x11.anden.v1.Service\x12D\n" +
-	"\tListNodes\x12\x1a.anden.v1.ListNodesRequest\x1a\x1b.anden.v1.ListNodesResponse2\xef\x01\n" +
+	"\tListNodes\x12\x1a.anden.v1.ListNodesRequest\x1a\x1b.anden.v1.ListNodesResponse2\xb2\x02\n" +
 	"\fAgentControl\x12A\n" +
 	"\bRegister\x12\x19.anden.v1.RegisterRequest\x1a\x1a.anden.v1.RegisterResponse\x12D\n" +
 	"\tHeartbeat\x12\x1a.anden.v1.HeartbeatRequest\x1a\x1b.anden.v1.HeartbeatResponse\x12V\n" +
-	"\x0fReportInstances\x12 .anden.v1.ReportInstancesRequest\x1a!.anden.v1.ReportInstancesResponseB6Z4github.com/CesarManzoCode/anden/gen/anden/v1;andenv1b\x06proto3"
+	"\x0fReportInstances\x12 .anden.v1.ReportInstancesRequest\x1a!.anden.v1.ReportInstancesResponse\x12A\n" +
+	"\bSetAwake\x12\x19.anden.v1.SetAwakeRequest\x1a\x1a.anden.v1.SetAwakeResponseB6Z4github.com/CesarManzoCode/anden/gen/anden/v1;andenv1b\x06proto3"
 
 var (
 	file_anden_v1_anden_proto_rawDescOnce sync.Once
@@ -2029,7 +2154,7 @@ func file_anden_v1_anden_proto_rawDescGZIP() []byte {
 }
 
 var file_anden_v1_anden_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
-var file_anden_v1_anden_proto_msgTypes = make([]protoimpl.MessageInfo, 26)
+var file_anden_v1_anden_proto_msgTypes = make([]protoimpl.MessageInfo, 28)
 var file_anden_v1_anden_proto_goTypes = []any{
 	(ServiceState)(0),               // 0: anden.v1.ServiceState
 	(WakeRoute)(0),                  // 1: anden.v1.WakeRoute
@@ -2060,10 +2185,12 @@ var file_anden_v1_anden_proto_goTypes = []any{
 	(*InstanceReport)(nil),          // 26: anden.v1.InstanceReport
 	(*ReportInstancesRequest)(nil),  // 27: anden.v1.ReportInstancesRequest
 	(*ReportInstancesResponse)(nil), // 28: anden.v1.ReportInstancesResponse
-	nil,                             // 29: anden.v1.ServiceSpec.EnvEntry
+	(*SetAwakeRequest)(nil),         // 29: anden.v1.SetAwakeRequest
+	(*SetAwakeResponse)(nil),        // 30: anden.v1.SetAwakeResponse
+	nil,                             // 31: anden.v1.ServiceSpec.EnvEntry
 }
 var file_anden_v1_anden_proto_depIdxs = []int32{
-	29, // 0: anden.v1.ServiceSpec.env:type_name -> anden.v1.ServiceSpec.EnvEntry
+	31, // 0: anden.v1.ServiceSpec.env:type_name -> anden.v1.ServiceSpec.EnvEntry
 	1,  // 1: anden.v1.ServiceSpec.wake_route:type_name -> anden.v1.WakeRoute
 	4,  // 2: anden.v1.ServiceSpec.healthcheck:type_name -> anden.v1.Healthcheck
 	5,  // 3: anden.v1.ServiceSpec.volumes:type_name -> anden.v1.Volume
@@ -2092,20 +2219,22 @@ var file_anden_v1_anden_proto_depIdxs = []int32{
 	21, // 26: anden.v1.AgentControl.Register:input_type -> anden.v1.RegisterRequest
 	23, // 27: anden.v1.AgentControl.Heartbeat:input_type -> anden.v1.HeartbeatRequest
 	27, // 28: anden.v1.AgentControl.ReportInstances:input_type -> anden.v1.ReportInstancesRequest
-	8,  // 29: anden.v1.Anden.CreateService:output_type -> anden.v1.Service
-	8,  // 30: anden.v1.Anden.GetService:output_type -> anden.v1.Service
-	12, // 31: anden.v1.Anden.ListServices:output_type -> anden.v1.ListServicesResponse
-	8,  // 32: anden.v1.Anden.SleepService:output_type -> anden.v1.Service
-	8,  // 33: anden.v1.Anden.WakeService:output_type -> anden.v1.Service
-	8,  // 34: anden.v1.Anden.DeleteService:output_type -> anden.v1.Service
-	8,  // 35: anden.v1.Anden.DeployService:output_type -> anden.v1.Service
-	8,  // 36: anden.v1.Anden.MoveService:output_type -> anden.v1.Service
-	20, // 37: anden.v1.Anden.ListNodes:output_type -> anden.v1.ListNodesResponse
-	22, // 38: anden.v1.AgentControl.Register:output_type -> anden.v1.RegisterResponse
-	25, // 39: anden.v1.AgentControl.Heartbeat:output_type -> anden.v1.HeartbeatResponse
-	28, // 40: anden.v1.AgentControl.ReportInstances:output_type -> anden.v1.ReportInstancesResponse
-	29, // [29:41] is the sub-list for method output_type
-	17, // [17:29] is the sub-list for method input_type
+	29, // 29: anden.v1.AgentControl.SetAwake:input_type -> anden.v1.SetAwakeRequest
+	8,  // 30: anden.v1.Anden.CreateService:output_type -> anden.v1.Service
+	8,  // 31: anden.v1.Anden.GetService:output_type -> anden.v1.Service
+	12, // 32: anden.v1.Anden.ListServices:output_type -> anden.v1.ListServicesResponse
+	8,  // 33: anden.v1.Anden.SleepService:output_type -> anden.v1.Service
+	8,  // 34: anden.v1.Anden.WakeService:output_type -> anden.v1.Service
+	8,  // 35: anden.v1.Anden.DeleteService:output_type -> anden.v1.Service
+	8,  // 36: anden.v1.Anden.DeployService:output_type -> anden.v1.Service
+	8,  // 37: anden.v1.Anden.MoveService:output_type -> anden.v1.Service
+	20, // 38: anden.v1.Anden.ListNodes:output_type -> anden.v1.ListNodesResponse
+	22, // 39: anden.v1.AgentControl.Register:output_type -> anden.v1.RegisterResponse
+	25, // 40: anden.v1.AgentControl.Heartbeat:output_type -> anden.v1.HeartbeatResponse
+	28, // 41: anden.v1.AgentControl.ReportInstances:output_type -> anden.v1.ReportInstancesResponse
+	30, // 42: anden.v1.AgentControl.SetAwake:output_type -> anden.v1.SetAwakeResponse
+	30, // [30:43] is the sub-list for method output_type
+	17, // [17:30] is the sub-list for method input_type
 	17, // [17:17] is the sub-list for extension type_name
 	17, // [17:17] is the sub-list for extension extendee
 	0,  // [0:17] is the sub-list for field type_name
@@ -2127,7 +2256,7 @@ func file_anden_v1_anden_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_anden_v1_anden_proto_rawDesc), len(file_anden_v1_anden_proto_rawDesc)),
 			NumEnums:      4,
-			NumMessages:   26,
+			NumMessages:   28,
 			NumExtensions: 0,
 			NumServices:   2,
 		},

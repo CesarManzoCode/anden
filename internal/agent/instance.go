@@ -10,6 +10,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -20,6 +21,7 @@ import (
 
 	andenv1 "github.com/CesarManzoCode/anden/gen/anden/v1"
 	"github.com/CesarManzoCode/anden/internal/image"
+	"github.com/CesarManzoCode/anden/internal/wake"
 )
 
 const (
@@ -28,6 +30,8 @@ const (
 	stopGrace     = 2 * time.Second
 	killTimeout   = 5 * time.Second
 	routeRelaunch = "relaunch"
+	// instanceIface is the veth of an instance, as it is called inside.
+	instanceIface = "eth0"
 )
 
 // paths are the places an instance occupies on the node (contract, section 3).
@@ -52,16 +56,24 @@ func instancePaths(state, cgroup, service string, generation uint64, id string) 
 	}
 }
 
-// instance is one instance of the node. a.mu guards state and stopping.
+// instance is one instance of the node. It lives on while its service sleeps,
+// as the machine that wakes it. a.mu guards state, stopping, idle, nextSample
+// and sleepAfter.
 type instance struct {
 	id, service         string
 	version, generation uint64
 	addr, route         string
 	seccomp             bool
 	paths               paths
+	assignment          *andenv1.Assignment
+	machine             *wake.Machine
 
 	state    andenv1.InstanceState
 	stopping bool
+	// idle is nil when the service never sleeps on its own (D05).
+	idle       *wake.Idle
+	nextSample time.Time
+	sleepAfter time.Time
 
 	// cancel ends a start in progress; started closes when it is over.
 	cancel  context.CancelFunc
@@ -69,10 +81,17 @@ type instance struct {
 	started chan struct{}
 }
 
-func (a *Agent) newInstance(ctx context.Context, as *andenv1.Assignment) *instance {
+// newInstance prepares an instance, without starting anything. An asleep one
+// begins as what is left of a sleep: nothing to wait for and nothing to report.
+func (a *Agent) newInstance(ctx context.Context, as *andenv1.Assignment, asleep bool) (*instance, error) {
 	spec := as.GetSpec()
+	addr, err := netip.ParseAddr(as.GetAddr())
+	if err != nil {
+		return nil, err
+	}
+	target := netip.AddrPortFrom(addr, uint16(spec.GetPort()))
 	ictx, cancel := context.WithCancel(ctx)
-	return &instance{
+	in := &instance{
 		id:         as.GetInstanceId(),
 		service:    spec.GetName(),
 		version:    as.GetVersion(),
@@ -81,11 +100,24 @@ func (a *Agent) newInstance(ctx context.Context, as *andenv1.Assignment) *instan
 		route:      routeRelaunch,
 		seccomp:    seccompEnabled(spec),
 		paths:      instancePaths(a.cfg.State, a.cfg.Cgroup, spec.GetName(), as.GetGeneration(), as.GetInstanceId()),
+		assignment: as,
 		state:      andenv1.InstanceState_INSTANCE_STATE_STARTING,
 		cancel:     cancel,
 		ctx:        ictx,
 		started:    make(chan struct{}),
 	}
+	if seconds := spec.GetIdleSeconds(); seconds > 0 {
+		in.idle = wake.NewIdle(time.Duration(seconds)*time.Second, time.Now())
+	}
+	control := &instanceControl{a: a, in: in}
+	if asleep {
+		in.state = andenv1.InstanceState_INSTANCE_STATE_STOPPED
+		in.machine = wake.NewDormant(target, control)
+		close(in.started)
+	} else {
+		in.machine = wake.NewMachine(target, control)
+	}
+	return in, nil
 }
 
 // start brings an instance to RUNNING, or to FAILED with no process left.
@@ -97,7 +129,7 @@ func (a *Agent) start(in *instance, as *andenv1.Assignment) {
 		err = a.awaitReady(in, as.GetSpec())
 	}
 	if err == nil {
-		a.setState(in, andenv1.InstanceState_INSTANCE_STATE_RUNNING)
+		a.running(in)
 		log.Printf("instance %s: running at %s", in.id, in.addr)
 		return
 	}
@@ -109,6 +141,136 @@ func (a *Agent) start(in *instance, as *andenv1.Assignment) {
 		log.Printf("instance %s: %v", in.id, err)
 	}
 	a.setState(in, andenv1.InstanceState_INSTANCE_STATE_FAILED)
+}
+
+// running marks an instance as up. Its idle window starts now.
+func (a *Agent) running(in *instance) {
+	a.setState(in, andenv1.InstanceState_INSTANCE_STATE_RUNNING)
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if in.idle != nil {
+		in.idle.Touch(time.Now())
+	}
+}
+
+// instanceControl is what the machine of an instance does on the node.
+type instanceControl struct {
+	a  *Agent
+	in *instance
+}
+
+func (c *instanceControl) Hold(target netip.AddrPort) error    { return c.a.nft.Add(target) }
+func (c *instanceControl) Release(target netip.AddrPort) error { return c.a.nft.Delete(target) }
+
+// LiveSockets reads the namespace through the first process of the instance.
+func (c *instanceControl) LiveSockets() (int, error) {
+	pid, err := firstProcess(c.in.paths.cgroup)
+	if err != nil {
+		return 0, err
+	}
+	sockets, err := wake.ReadSockets(pid)
+	return sockets.Live, err
+}
+
+// Halt ends the processes and frees the network and the rootfs, keeping the
+// cgroup and the upper layer for the wake. The memory goes back last, when nothing
+// holds it anymore. Until it is done the instance is still reported as running.
+func (c *instanceControl) Halt() error {
+	c.a.declare(c.in, false)
+	c.a.terminate(c.in)
+	c.a.release(c.in)
+	if err := reclaim(c.in.paths.cgroup); err != nil {
+		log.Printf("instance %s: %v", c.in.id, err)
+	}
+	c.a.setState(c.in, andenv1.InstanceState_INSTANCE_STATE_STOPPED)
+	log.Printf("instance %s: asleep", c.in.id)
+	return nil
+}
+
+// Start relaunches the instance: its rootfs and network are made anew. The
+// control plane learns of it afterwards, so a wake does not wait for it.
+func (c *instanceControl) Start() error {
+	c.a.setState(c.in, andenv1.InstanceState_INSTANCE_STATE_STARTING)
+	c.a.declare(c.in, true)
+	return c.a.launch(c.in, c.in.assignment)
+}
+
+// Probe is a TCP connect from the node, as D04 asks, whatever the healthcheck.
+func (c *instanceControl) Probe() error {
+	populated, err := cgroupPopulated(c.in.paths.cgroup)
+	if err != nil {
+		return err
+	}
+	if !populated {
+		return wake.ErrDead
+	}
+	ctx, cancel := context.WithTimeout(c.in.ctx, probeLimit)
+	defer cancel()
+	conn, err := wake.Dial(ctx, c.in.machine.Target())
+	if err != nil {
+		return err
+	}
+	return conn.Close()
+}
+
+func (c *instanceControl) Ready() {
+	c.a.running(c.in)
+	log.Printf("instance %s: woke at %s", c.in.id, c.in.addr)
+}
+
+// Fail leaves the instance FAILED with no process left, as a failed start does.
+func (c *instanceControl) Fail(err error) {
+	if c.in.ctx.Err() != nil {
+		return
+	}
+	log.Printf("instance %s: %v", c.in.id, err)
+	if err := killCgroup(c.in.paths.cgroup); err != nil && !errors.Is(err, os.ErrNotExist) {
+		log.Printf("instance %s: %v", c.in.id, err)
+	}
+	c.a.setState(c.in, andenv1.InstanceState_INSTANCE_STATE_FAILED)
+}
+
+// firstProcess returns a process of the cgroup. All of them share the network
+// namespace of the instance.
+func firstProcess(cgroup string) (int, error) {
+	raw, err := os.ReadFile(filepath.Join(cgroup, "cgroup.procs"))
+	if err != nil {
+		return 0, err
+	}
+	first, _, _ := strings.Cut(string(raw), "\n")
+	if first == "" {
+		return 0, fmt.Errorf("no process in %s", cgroup)
+	}
+	return strconv.Atoi(first)
+}
+
+// readActivity is the sample of D05 for an instance.
+func readActivity(cgroup string) (wake.Sockets, uint64, error) {
+	pid, err := firstProcess(cgroup)
+	if err != nil {
+		return wake.Sockets{}, 0, err
+	}
+	sockets, err := wake.ReadSockets(pid)
+	if err != nil {
+		return wake.Sockets{}, 0, err
+	}
+	tx, err := wake.ReadTxPackets(pid, instanceIface)
+	return sockets, tx, err
+}
+
+// reclaim gives back the memory still charged to an empty cgroup. The kernel
+// answers EAGAIN if it could not reclaim all it was asked for, which is not a
+// failure: what it could not free is what memory.current shows afterwards.
+func reclaim(cgroup string) error {
+	raw, err := os.ReadFile(filepath.Join(cgroup, "memory.current"))
+	if err != nil {
+		return err
+	}
+	err = os.WriteFile(filepath.Join(cgroup, "memory.reclaim"), bytes.TrimSpace(raw), 0o644)
+	if errors.Is(err, syscall.EAGAIN) {
+		return nil
+	}
+	return err
 }
 
 // launch prepares the rootfs, cgroup and network and has the runtime start the
@@ -272,11 +434,15 @@ func (a *Agent) setupNetwork(in *instance) error {
 	if out, err := exec.Command("unshare", namespaceArgs(p.netNS, p.utsNS, p.ipcNS)...).CombinedOutput(); err != nil {
 		return fmt.Errorf("unshare: %w: %s", err, out)
 	}
+	mac, err := macOf(in.addr)
+	if err != nil {
+		return err
+	}
 	host, peer := vethNames(in.id)
 	if err := ipBatch(nil, hostBatch(host, peer, p.netNS)); err != nil {
 		return err
 	}
-	return ipBatch([]string{"--net=" + p.netNS}, instanceBatch(peer, in.addr, a.bits, a.gateway))
+	return ipBatch([]string{"--net=" + p.netNS}, instanceBatch(peer, mac, in.addr, a.bits, a.gateway))
 }
 
 // ipBatch runs `ip -batch -`, under nsenter with these arguments if any.
@@ -348,12 +514,26 @@ func (a *Agent) probe(ctx context.Context, target string, hc *andenv1.Healthchec
 	return nil
 }
 
-// stop ends an instance with SIGTERM, then cgroup.kill, and removes everything
-// it occupied. Until that is done it keeps being reported as it was: its address
-// and processes are still in use.
+// stop ends an instance, asleep or not, and removes everything it occupied. Until
+// that is done it keeps being reported as it was: its address and processes are
+// still in use.
 func (a *Agent) stop(in *instance) {
 	in.cancel()
 	<-in.started
+	in.machine.Close()
+	a.terminate(in)
+	a.teardown(in)
+	a.proxy.Unregister(in.machine)
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	delete(a.instances, in.id)
+	delete(a.intents, in.id)
+	a.changes++
+}
+
+// terminate ends the processes of an instance with SIGTERM and, after the grace
+// period, cgroup.kill, and has the runtime forget the container.
+func (a *Agent) terminate(in *instance) {
 	p := in.paths
 	if populated, _ := cgroupPopulated(p.cgroup); populated {
 		// It fails when create never finished; cgroup.kill covers that.
@@ -368,16 +548,23 @@ func (a *Agent) stop(in *instance) {
 		}
 	}
 	_ = exec.Command(a.cfg.Runtime, a.runtimeArgs("delete", "--force", in.id)...).Run()
-	a.teardown(in)
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	delete(a.instances, in.id)
-	a.changes++
 }
 
 // teardown removes what launch created. Each step may find nothing to do,
 // because a start can fail or be cancelled at any point.
 func (a *Agent) teardown(in *instance) {
+	p := in.paths
+	a.release(in)
+	if err := os.RemoveAll(p.dir); err != nil {
+		log.Printf("instance %s: %v", in.id, err)
+	}
+	if err := removeCgroup(p.cgroup); err != nil {
+		log.Printf("instance %s: %v", in.id, err)
+	}
+}
+
+// release frees the veth, the namespaces and the overlay of an instance.
+func (a *Agent) release(in *instance) {
 	p := in.paths
 	host, _ := vethNames(in.id)
 	// Explicitly, and not through the namespace: the kernel destroys a netns
@@ -388,12 +575,6 @@ func (a *Agent) teardown(in *instance) {
 		if err != nil && !errors.Is(err, syscall.EINVAL) && !errors.Is(err, syscall.ENOENT) {
 			log.Printf("instance %s: unmount %s: %v", in.id, target, err)
 		}
-	}
-	if err := os.RemoveAll(p.dir); err != nil {
-		log.Printf("instance %s: %v", in.id, err)
-	}
-	if err := removeCgroup(p.cgroup); err != nil {
-		log.Printf("instance %s: %v", in.id, err)
 	}
 }
 

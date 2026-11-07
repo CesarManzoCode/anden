@@ -18,6 +18,7 @@ ANDEN = ROOT / "bin" / "anden"
 MKIMAGE = ROOT / "bin" / "mkimage"
 ACTIVE = "SERVICE_STATE_ACTIVE"
 FAILED = "SERVICE_STATE_FAILED"
+ASLEEP = "SERVICE_STATE_ASLEEP"
 ECHO_PORT = 8080
 UP_TIMEOUT_SECONDS = 180
 ACTIVE_TIMEOUT_SECONDS = 60
@@ -218,10 +219,10 @@ class Datacenter:
         out = self._checked("image", "import", "--layout", f"{layout}:latest", "--json")
         return json.loads(out)["digest"]
 
-    def create_echo(self, name, digest, cpu_millis=200, memory_mib=64, pids_max=0):
-        """Creates an echosvc that never sleeps and waits until it answers."""
+    def create_echo(self, name, digest, cpu_millis=200, memory_mib=64, pids_max=0, idle_seconds=0):
+        """Creates an echosvc, by default one that never sleeps, and waits until it answers."""
         self.svc("create", "--name", name, "--image", digest, "--port", str(ECHO_PORT), "--cpu-millis", str(cpu_millis),
-                 "--memory-mib", str(memory_mib), "--pids-max", str(pids_max), "--idle-seconds", "0",
+                 "--memory-mib", str(memory_mib), "--pids-max", str(pids_max), "--idle-seconds", str(idle_seconds),
                  "--env", f"PORT={ECHO_PORT}")
         return self.wait_state(name, ACTIVE, ACTIVE_TIMEOUT_SECONDS)
 

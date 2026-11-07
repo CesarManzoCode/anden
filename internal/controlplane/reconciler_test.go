@@ -2,6 +2,7 @@ package controlplane
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -359,6 +360,32 @@ func TestBlobHandler(t *testing.T) {
 		resp.Body.Close()
 		if resp.StatusCode != want {
 			t.Errorf("%s: %d, want %d", path, resp.StatusCode, want)
+		}
+	}
+}
+
+func TestApplyIntent(t *testing.T) {
+	base := store.Service{DesiredNode: "node1", Generation: 2, DesiredAwake: true, State: stateActive}
+	asleep := base
+	if err := applyIntent(&asleep, "node1", 2, false); err != nil || asleep.DesiredAwake || asleep.State != stateSleeping {
+		t.Fatalf("sleep: %v %+v", err, asleep)
+	}
+	woken := store.Service{DesiredNode: "node1", Generation: 2, State: stateAsleep}
+	if err := applyIntent(&woken, "node1", 2, true); err != nil || !woken.DesiredAwake || woken.State != stateWaking || woken.Generation != 2 {
+		t.Fatalf("wake: %v %+v", err, woken)
+	}
+	for name, s := range map[string]struct {
+		node       string
+		generation uint64
+		awake      bool
+	}{
+		"other node":       {"node2", 2, false},
+		"other generation": {"node1", 1, false},
+		"already so":       {"node1", 2, true},
+	} {
+		got := base
+		if err := applyIntent(&got, s.node, s.generation, s.awake); !errors.Is(err, errNothingToChange) || got.DesiredAwake != base.DesiredAwake || got.State != base.State {
+			t.Errorf("%s: %v %+v", name, err, got)
 		}
 	}
 }

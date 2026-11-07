@@ -31,6 +31,9 @@
 - `WakeService` reemplaza una instancia en `FAILED`; `DeployService` y `MoveService` paran la instancia y arrancan otra.
 - `echosvc` responde a `/hog`, `/fork` y `/burn`, que exceden a propósito sus límites.
 - Criterios de aceptación C2 (`acceptance/c02_durability.py`), C4 (`c04_memory.py`) y C5 (`c05_pids_cpu.py`).
+- Un servicio con `idle_seconds` mayor que 0 se duerme solo tras esa ventana sin conexiones ni tráfico saliente: sus procesos terminan, se liberan su red y su overlay, y devuelve su memoria. `SleepService` sigue el mismo camino y espera a que no queden conexiones vivas.
+- Una conexión a un servicio dormido lo despierta por la ruta `relaunch` y queda retenida hasta que responde, en cualquier puerto TCP. `WakeService` sigue el mismo camino.
+- Criterio de aceptación C7 (`acceptance/c07_sleep.py`).
 
 - Contrato del sistema, con decisiones cerradas de lenguaje, arquitectura, rutas de despertar, proxy, simulador, colocación y fencing.
 - Investigación con fuentes primarias y versiones de herramientas verificadas en la máquina de destino.

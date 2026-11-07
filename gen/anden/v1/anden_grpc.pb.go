@@ -431,6 +431,7 @@ const (
 	AgentControl_Register_FullMethodName        = "/anden.v1.AgentControl/Register"
 	AgentControl_Heartbeat_FullMethodName       = "/anden.v1.AgentControl/Heartbeat"
 	AgentControl_ReportInstances_FullMethodName = "/anden.v1.AgentControl/ReportInstances"
+	AgentControl_SetAwake_FullMethodName        = "/anden.v1.AgentControl/SetAwake"
 )
 
 // AgentControlClient is the client API for AgentControl service.
@@ -440,6 +441,7 @@ type AgentControlClient interface {
 	Register(ctx context.Context, in *RegisterRequest, opts ...grpc.CallOption) (*RegisterResponse, error)
 	Heartbeat(ctx context.Context, in *HeartbeatRequest, opts ...grpc.CallOption) (*HeartbeatResponse, error)
 	ReportInstances(ctx context.Context, in *ReportInstancesRequest, opts ...grpc.CallOption) (*ReportInstancesResponse, error)
+	SetAwake(ctx context.Context, in *SetAwakeRequest, opts ...grpc.CallOption) (*SetAwakeResponse, error)
 }
 
 type agentControlClient struct {
@@ -480,6 +482,16 @@ func (c *agentControlClient) ReportInstances(ctx context.Context, in *ReportInst
 	return out, nil
 }
 
+func (c *agentControlClient) SetAwake(ctx context.Context, in *SetAwakeRequest, opts ...grpc.CallOption) (*SetAwakeResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SetAwakeResponse)
+	err := c.cc.Invoke(ctx, AgentControl_SetAwake_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // AgentControlServer is the server API for AgentControl service.
 // All implementations must embed UnimplementedAgentControlServer
 // for forward compatibility.
@@ -487,6 +499,7 @@ type AgentControlServer interface {
 	Register(context.Context, *RegisterRequest) (*RegisterResponse, error)
 	Heartbeat(context.Context, *HeartbeatRequest) (*HeartbeatResponse, error)
 	ReportInstances(context.Context, *ReportInstancesRequest) (*ReportInstancesResponse, error)
+	SetAwake(context.Context, *SetAwakeRequest) (*SetAwakeResponse, error)
 	mustEmbedUnimplementedAgentControlServer()
 }
 
@@ -505,6 +518,9 @@ func (UnimplementedAgentControlServer) Heartbeat(context.Context, *HeartbeatRequ
 }
 func (UnimplementedAgentControlServer) ReportInstances(context.Context, *ReportInstancesRequest) (*ReportInstancesResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ReportInstances not implemented")
+}
+func (UnimplementedAgentControlServer) SetAwake(context.Context, *SetAwakeRequest) (*SetAwakeResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SetAwake not implemented")
 }
 func (UnimplementedAgentControlServer) mustEmbedUnimplementedAgentControlServer() {}
 func (UnimplementedAgentControlServer) testEmbeddedByValue()                      {}
@@ -581,6 +597,24 @@ func _AgentControl_ReportInstances_Handler(srv interface{}, ctx context.Context,
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AgentControl_SetAwake_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetAwakeRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentControlServer).SetAwake(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentControl_SetAwake_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentControlServer).SetAwake(ctx, req.(*SetAwakeRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // AgentControl_ServiceDesc is the grpc.ServiceDesc for AgentControl service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -599,6 +633,10 @@ var AgentControl_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ReportInstances",
 			Handler:    _AgentControl_ReportInstances_Handler,
+		},
+		{
+			MethodName: "SetAwake",
+			Handler:    _AgentControl_SetAwake_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

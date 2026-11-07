@@ -210,12 +210,31 @@ func (a *andenService) ListServices(ctx context.Context, _ *andenv1.ListServices
 	return out, nil
 }
 
+// wantAsleep and wantAwake are the desired change of a sleep and of a wake,
+// whether the API asked for it or a node decided it.
+func wantAsleep(s *store.Service) {
+	s.DesiredAwake = false
+	if s.State != stateAsleep {
+		s.State = stateSleeping
+	}
+}
+
+func wantAwake(s *store.Service) {
+	s.DesiredAwake = true
+	// The instance of a failed generation stays for inspection; only a
+	// new generation replaces it.
+	if s.State == stateFailed {
+		s.Generation++
+	}
+	switch s.State {
+	case stateSleeping, stateAsleep, stateFailed:
+		s.State = stateWaking
+	}
+}
+
 func (a *andenService) SleepService(ctx context.Context, req *andenv1.SleepServiceRequest) (*andenv1.Service, error) {
 	svc, err := a.cp.store.UpdateDesired(ctx, req.GetName(), func(s *store.Service) error {
-		s.DesiredAwake = false
-		if s.State != stateAsleep {
-			s.State = stateSleeping
-		}
+		wantAsleep(s)
 		return nil
 	})
 	return a.reply(ctx, svc, err)
@@ -223,16 +242,7 @@ func (a *andenService) SleepService(ctx context.Context, req *andenv1.SleepServi
 
 func (a *andenService) WakeService(ctx context.Context, req *andenv1.WakeServiceRequest) (*andenv1.Service, error) {
 	svc, err := a.cp.store.UpdateDesired(ctx, req.GetName(), func(s *store.Service) error {
-		s.DesiredAwake = true
-		// The instance of a failed generation stays for inspection; only a
-		// new generation replaces it.
-		if s.State == stateFailed {
-			s.Generation++
-		}
-		switch s.State {
-		case stateSleeping, stateAsleep, stateFailed:
-			s.State = stateWaking
-		}
+		wantAwake(s)
 		return nil
 	})
 	return a.reply(ctx, svc, err)

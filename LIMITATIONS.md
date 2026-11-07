@@ -74,6 +74,22 @@ Fuente única de lo que Andén no demuestra. Ningún otro archivo los repite.
 - La lista de llamadas que bloquea el filtro seccomp es una decisión propia, sin un perfil de referencia detrás. Un servicio que necesite una de ellas recibe `EPERM`.
 - La capacidad de un nodo simulado es un tercio de los CPU y de la memoria de la máquina, sin reservar nada para el plano de control ni para Postgres.
 
+## Dormir y despertar
+
+- La ruta `restore` todavía no existe: un servicio con `wake_route = restore` despierta por `relaunch` y su instancia lo reporta en `route`.
+- `wake_events.jsonl` y el desglose por fases todavía no se escriben (K3).
+- El sueño conserva `upper/` y la cgroup. Tras un `relaunch` el servicio pierde su memoria, pero ve los archivos que escribió; `/.anden/stdio.log` sí empieza vacío en cada arranque.
+- Un socket en `TIME_WAIT` no aborta el sueño, aunque el prompt del sprint pide abortar con todo lo que no sea `LISTEN`. Un `TIME_WAIT` no tiene proceso ni datos, y dura 60 s en el servicio que cerró primero, de modo que lo dejaría sin dormir ese tiempo. Cualquier otro estado sí aborta.
+- `SleepService` sobre un servicio con una conexión viva no la corta: queda en `SLEEPING` y lo reintenta cada segundo hasta que la conexión termine.
+- El estado que da la API va detrás del nodo: un despertar no espera al plano de control, que se entera en el siguiente latido.
+- Si un despertar falla (el arranque da error o nada escucha en 10 s), la instancia queda en `FAILED`, las conexiones retenidas se cierran y las nuevas también, hasta que `WakeService` o `DeployService` la reemplacen. No hay reintento automático.
+- Un `DeployService`, `MoveService` o `DeleteService` que llega durante un despertar cierra las conexiones retenidas en vez de pasarlas a la instancia nueva.
+- Solo espera el despertar a que el puerto acepte conexiones TCP, como pide D04. El `healthcheck` del servicio se usa en el primer arranque, no al despertar.
+- El despertar va siempre al nodo donde se durmió, sin comprobar que aún quepa (D07, K4). Mover un servicio dormido lo deja sin dirección hasta el siguiente `WakeService`: mientras tanto una conexión no lo despierta (D22, K4).
+- Solo se retienen conexiones TCP sobre IPv4: el set `sleeping` es `ipv4_addr`, y `eth0` de una instancia no tiene dirección IPv6.
+- La señal de inactividad se muestrea a un cuarto de la ventana. Una conexión que abre y cierra entre dos muestras solo se ve por los paquetes que el servicio envió.
+- El servicio ve como origen la dirección de `svc0` en las conexiones que pasan por el proxy, no la del cliente.
+
 ## Simulador
 
 - `anden up` necesita `anden-agent` junto a `anden` en `bin/`. Sin él, `_dc-init` falla antes de arrancar `andend` y `up` sale con error.

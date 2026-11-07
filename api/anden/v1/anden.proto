@@ -22,6 +22,7 @@ service AgentControl {
   rpc Register(RegisterRequest) returns (RegisterResponse);
   rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
   rpc ReportInstances(ReportInstancesRequest) returns (ReportInstancesResponse);
+  rpc SetAwake(SetAwakeRequest) returns (SetAwakeResponse);
 }
 
 enum ServiceState {
@@ -224,3 +225,16 @@ message ReportInstancesRequest {
 }
 
 message ReportInstancesResponse {}
+
+// SetAwake records what the node decided alone: that an idle service went to
+// sleep, or that a connection woke a sleeping one. It is ignored if generation
+// is no longer the service's on this node.
+message SetAwakeRequest {
+  string node = 1;
+  uint64 epoch = 2;
+  string service = 3;
+  uint64 generation = 4;
+  bool awake = 5;
+}
+
+message SetAwakeResponse {}

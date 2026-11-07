@@ -15,6 +15,7 @@ import (
 	andenv1 "github.com/CesarManzoCode/anden/gen/anden/v1"
 	"github.com/CesarManzoCode/anden/internal/image"
 	ociruntime "github.com/CesarManzoCode/anden/internal/runtime"
+	"github.com/CesarManzoCode/anden/internal/wake"
 )
 
 func testSpec() *andenv1.ServiceSpec {
@@ -143,9 +144,11 @@ func TestNetworkCommands(t *testing.T) {
 	}) {
 		t.Errorf("hostBatch %q", got)
 	}
-	if got := instanceBatch("vc1", "10.81.0.2", 16, "10.81.0.1"); !reflect.DeepEqual(got, []string{
+	if got := instanceBatch("vc1", "02:00:0a:51:00:02", "10.81.0.2", 16, "10.81.0.1"); !reflect.DeepEqual(got, []string{
 		"link set lo up",
 		"link set vc1 name eth0",
+		"link set eth0 address 02:00:0a:51:00:02",
+		"link set eth0 addrgenmode none",
 		"addr add 10.81.0.2/16 dev eth0",
 		"link set eth0 up",
 		"route add default via 10.81.0.1",
@@ -154,6 +157,17 @@ func TestNetworkCommands(t *testing.T) {
 	}
 	if got := namespaceArgs("/n", "/u", "/i"); !reflect.DeepEqual(got, []string{"--net=/n", "--uts=/u", "--ipc=/i", "true"}) {
 		t.Errorf("namespaceArgs %q", got)
+	}
+}
+
+func TestMacOf(t *testing.T) {
+	if got, err := macOf("10.81.0.2"); err != nil || got != "02:00:0a:51:00:02" {
+		t.Errorf("macOf = %q, %v", got, err)
+	}
+	for _, bad := range []string{"", "fe80::1", "10.81.0"} {
+		if got, err := macOf(bad); err == nil {
+			t.Errorf("macOf(%q) = %q", bad, got)
+		}
 	}
 }
 
@@ -199,6 +213,111 @@ func TestDiff(t *testing.T) {
 				t.Fatalf("start %q stop %q, want %q %q", ids, stop, c.wantStart, c.wantStop)
 			}
 		})
+	}
+}
+
+func TestDormant(t *testing.T) {
+	cases := []struct {
+		name    string
+		desired []*andenv1.Assignment
+		have    map[string]local
+		want    []string
+	}{
+		{"nothing", nil, nil, nil},
+		{"asleep and unknown takes its place", []*andenv1.Assignment{assignment("a", 1, false)}, nil, []string{"a-1"}},
+		{"awake is not dormant", []*andenv1.Assignment{assignment("a", 1, true)}, nil, nil},
+		{"already here", []*andenv1.Assignment{assignment("a", 1, false)}, map[string]local{"a-1": {service: "a"}}, nil},
+		{"waits for the previous generation", []*andenv1.Assignment{assignment("a", 2, false)},
+			map[string]local{"a-1": {service: "a", stopping: true}}, nil},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var ids []string
+			for _, as := range dormant(c.desired, c.have) {
+				ids = append(ids, as.GetInstanceId())
+			}
+			if !slices.Equal(ids, c.want) {
+				t.Fatalf("dormant %q, want %q", ids, c.want)
+			}
+		})
+	}
+}
+
+func TestSleepAction(t *testing.T) {
+	const (
+		running  = andenv1.InstanceState_INSTANCE_STATE_RUNNING
+		starting = andenv1.InstanceState_INSTANCE_STATE_STARTING
+		stopped  = andenv1.InstanceState_INSTANCE_STATE_STOPPED
+		failed   = andenv1.InstanceState_INSTANCE_STATE_FAILED
+	)
+	cases := []struct {
+		name      string
+		mustSleep bool
+		machine   wake.State
+		state     andenv1.InstanceState
+		want      action
+	}{
+		{"unassigned stops", false, wake.Active, running, actionStop},
+		{"unassigned stops even asleep", false, wake.Asleep, stopped, actionStop},
+		{"running sleeps", true, wake.Active, running, actionSleep},
+		{"sleeping waits", true, wake.Sleeping, running, actionNone},
+		{"asleep stays", true, wake.Asleep, stopped, actionNone},
+		{"waking waits", true, wake.Waking, starting, actionNone},
+		{"first start stops", true, wake.Active, starting, actionStop},
+		{"died stops", true, wake.Active, failed, actionStop},
+		{"failed wake stops", true, wake.Failed, failed, actionStop},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := sleepAction(c.mustSleep, c.machine, c.state); got != c.want {
+				t.Fatalf("sleepAction = %d, want %d", got, c.want)
+			}
+		})
+	}
+}
+
+func TestEffectiveAndDeclare(t *testing.T) {
+	a := &Agent{intents: map[string]*intent{}, beatNow: make(chan struct{}, 1),
+		desired: []*andenv1.Assignment{assignment("a", 1, false), assignment("b", 1, true)}}
+	in := &instance{id: "a-1", service: "a", generation: 1}
+	a.declare(in, false)
+	if len(a.intents) != 0 {
+		t.Fatalf("what the control plane already says is no intent: %+v", a.intents)
+	}
+	a.declare(in, true)
+	if it := a.intents["a-1"]; it == nil || !it.awake || it.service != "a" || it.generation != 1 {
+		t.Fatalf("intent %+v", it)
+	}
+	if len(a.beatNow) != 1 {
+		t.Error("an intent must ask for a heartbeat")
+	}
+	got := a.effective()
+	if !got[0].GetAwake() || !got[1].GetAwake() {
+		t.Fatalf("effective %+v", got)
+	}
+	if a.desired[0].GetAwake() {
+		t.Fatal("effective changed what the control plane sent")
+	}
+	// A pending intent is replaced even when the new one matches desired.
+	a.declare(in, false)
+	if it := a.intents["a-1"]; it == nil || it.awake {
+		t.Fatalf("intent %+v", it)
+	}
+}
+
+func TestFirstProcess(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "cgroup.procs"), []byte("41\n42\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if pid, err := firstProcess(dir); err != nil || pid != 41 {
+		t.Fatalf("firstProcess = %d, %v", pid, err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "cgroup.procs"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if pid, err := firstProcess(dir); err == nil {
+		t.Fatalf("an empty cgroup has no process, got %d", pid)
 	}
 }
 

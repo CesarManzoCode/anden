@@ -2,6 +2,7 @@ package controlplane
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 
@@ -121,4 +122,42 @@ func (a *agentService) ReportInstances(ctx context.Context, req *andenv1.ReportI
 	a.cp.live.touch(req.GetNode())
 	a.cp.rec.Kick()
 	return &andenv1.ReportInstancesResponse{}, nil
+}
+
+// errNothingToChange leaves a service as it is: an intent can arrive when the
+// service has moved on, or when the desired state already says the same.
+var errNothingToChange = errors.New("nothing to change")
+
+// applyIntent applies what a node decided about a service placed on it.
+func applyIntent(s *store.Service, node string, generation uint64, awake bool) error {
+	if s.DesiredNode != node || uint64(s.Generation) != generation || s.DesiredAwake == awake {
+		return errNothingToChange
+	}
+	if awake {
+		wantAwake(s)
+	} else {
+		wantAsleep(s)
+	}
+	return nil
+}
+
+// SetAwake records in the desired state a sleep or a wake that the node already
+// carried out: a wake waits for no one, and durable state must not contradict it.
+func (a *agentService) SetAwake(ctx context.Context, req *andenv1.SetAwakeRequest) (*andenv1.SetAwakeResponse, error) {
+	epoch, err := a.cp.store.NodeEpoch(ctx, req.GetNode())
+	if err != nil {
+		return nil, grpcError(err)
+	}
+	if uint64(epoch) != req.GetEpoch() {
+		return nil, status.Errorf(codes.FailedPrecondition, "epoch %d of %s is stale, current is %d", req.GetEpoch(), req.GetNode(), epoch)
+	}
+	a.cp.live.touch(req.GetNode())
+	_, err = a.cp.store.UpdateDesired(ctx, req.GetService(), func(s *store.Service) error {
+		return applyIntent(s, req.GetNode(), req.GetGeneration(), req.GetAwake())
+	})
+	if err != nil && !errors.Is(err, errNothingToChange) && !errors.Is(err, store.ErrNotFound) {
+		return nil, grpcError(err)
+	}
+	a.cp.rec.Kick()
+	return &andenv1.SetAwakeResponse{}, nil
 }
