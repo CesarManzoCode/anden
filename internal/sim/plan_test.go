@@ -128,6 +128,7 @@ func TestPeerBatch(t *testing.T) {
 		"link add svc0 type bridge",
 		"addr add 10.82.0.1/16 dev svc0",
 		"link set svc0 up",
+		"route add 10.80.0.100/32 via 10.80.0.1",
 	}
 	if !reflect.DeepEqual(node, want) {
 		t.Fatalf("node2 batch = %q", node)

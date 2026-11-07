@@ -97,6 +97,7 @@ Fuente única de lo que Andén no demuestra. Ningún otro archivo los repite.
 - `_dc-init` reinicia `andend` cada vez que sale, sin espera ni límite de intentos.
 - `anden chaos` solo implementa `kill` por ahora; `partition`, `heal` y `slow` no existen todavía.
 - Los procesos de `anden exec` entran al namespace de usuario y de red, no al de montaje del datacenter: ven los montajes del host.
+- Solo el cliente externo y el netns raíz llegan al borde. Desde un nodo, una conexión a `10.80.0.2` agota el tiempo, incluso hacia un servicio de ese mismo nodo: la respuesta del servicio no pasa por el netns raíz y el DNAT no se deshace. Cada nodo tiene una ruta `/32` hacia el cliente para resolver esto solo para el cliente.
 
 ## Mediciones
 

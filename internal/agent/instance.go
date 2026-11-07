@@ -266,11 +266,28 @@ func reclaim(cgroup string) error {
 	if err != nil {
 		return err
 	}
-	err = os.WriteFile(filepath.Join(cgroup, "memory.reclaim"), bytes.TrimSpace(raw), 0o644)
+	err = writeUnpolled(filepath.Join(cgroup, "memory.reclaim"), bytes.TrimSpace(raw))
 	if errors.Is(err, syscall.EAGAIN) {
 		return nil
 	}
 	return err
+}
+
+// writeUnpolled makes one write without the runtime poller. An os.File on a
+// cgroup file joins the poller, so it takes EAGAIN for a full buffer and waits
+// for a readiness that kernfs never signals: the write would not return.
+func writeUnpolled(path string, data []byte) error {
+	fd, err := syscall.Open(path, syscall.O_WRONLY|syscall.O_CLOEXEC, 0)
+	if err != nil {
+		return &os.PathError{Op: "open", Path: path, Err: err}
+	}
+	defer syscall.Close(fd)
+	for {
+		_, err = syscall.Write(fd, data)
+		if !errors.Is(err, syscall.EINTR) {
+			return err
+		}
+	}
 }
 
 // launch prepares the rootfs, cgroup and network and has the runtime start the

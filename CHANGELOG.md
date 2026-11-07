@@ -42,6 +42,12 @@
 - Investigación con fuentes primarias y versiones de herramientas verificadas en la máquina de destino.
 - Comando único de chequeo (`make check`) y CI que lo corre.
 
+### Corregido
+
+- Las respuestas al cliente externo vuelven por el netns raíz: cada nodo tiene una ruta `/32` hacia `10.80.0.100`. Sin ella, ninguna petición por el borde recibía respuesta.
+- `memory.reclaim` se escribe sin el poller de Go. Con `EAGAIN` del kernel, `os.WriteFile` no regresaba y el servicio se quedaba en `SLEEPING`.
+- El informe de C5 conserva su objeto `cpu`; el modelo de CPU va en `cpu_model`.
+
 ### Decisiones
 
 - Todo el sistema corre sin root dentro de un namespace de usuario: se probó que red, nftables, overlayfs, cgroups delegados y CRIU funcionan así.

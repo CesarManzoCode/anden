@@ -73,7 +73,9 @@ def write_report(name, data):
     if match is None:
         raise ValueError(f"not a report name: {name}")
     report = dict(data)
-    report.update(criterion=f"C{match.group(1)}", tree=tree_stamp(), kernel=os.uname().release, cpu=cpu_model())
+    report.update(criterion=f"C{match.group(1)}", tree=tree_stamp(), kernel=os.uname().release)
+    # The table of section 6 gives C5 a `cpu` object of its own, which must survive: it then carries `cpu_model`.
+    report.setdefault("cpu", cpu_model())
     REPORT_DIR.mkdir(parents=True, exist_ok=True)
     path = REPORT_DIR / f"{name}.json"
     path.write_text(json.dumps(report, indent=2) + "\n")

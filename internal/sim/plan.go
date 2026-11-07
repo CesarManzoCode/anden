@@ -185,6 +185,9 @@ func PeerBatch(peer string) ([]string, error) {
 			"link add svc0 type bridge",
 			"addr add "+node.Gateway+"/16 dev svc0",
 			"link set svc0 up",
+			// The client shares eth0's subnet, but a reply must go back through
+			// the root netns, or the DNAT of the edge is never undone.
+			"route add "+ClientIP+"/32 via "+RootIP,
 		)
 	}
 	return lines, nil

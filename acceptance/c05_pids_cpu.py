@@ -82,6 +82,7 @@ def main():
                  "host_fork_ok": host_fork_ok, "others": other_services, "fork_status": fork_status},
         "cpu": {"quota_fraction": QUOTA_FRACTION, "usage_usec_start": start_usec, "usage_usec_end": end_usec,
                 "wall_seconds": wall, "cpu_max_raw": cpu_max, "burn_status": burn_status},
+        "cpu_model": lib.cpu_model(),
     })
     used = (end_usec - start_usec) / (wall * 1e6)
     checks = {

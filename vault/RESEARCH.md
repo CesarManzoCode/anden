@@ -155,6 +155,16 @@ Lo no medido aquí: la cifra de 2 ms de sondeo es el intervalo pedido por D04, n
 | `valkey-server` 9.1.2 | `--port P --bind 0.0.0.0 --protected-mode no --save ''` arranca: «Ready to accept connections tcp». `/etc/valkey/valkey.conf` trae `protected-mode yes` y `bind 127.0.0.1 -::1` |
 | `redis-cli` | `--help` documenta `-h`, `-p` y `--no-raw` («Force formatted output even when STDOUT is not a tty»), o sea que sin tty la salida es cruda |
 
+## Cierre de k2 (medido el 6 nov 2026)
+
+| Herramienta o archivo | Qué se comprobó en esta máquina |
+|---|---|
+| `memory.reclaim` de una cgroup vacía, kernel 7.2.14 | Con `memory.current` en 331776 bytes, escribir ese valor con `os.write` de Python da `EAGAIN`, y escribir 1048576 también; escribir `0` no da error |
+| `os.WriteFile` de Go sobre `memory.reclaim`, go1.27.3 | No regresa cuando el kernel responde `EAGAIN`: la pila del agente, obtenida con `SIGQUIT`, queda en `internal/poll.(*FD).Write`, en `waitWrite`. Con `syscall.Open` y `syscall.Write` el `EAGAIN` llega al llamador |
+| Borde con `10.80.0.100` y los nodos en la misma `/24` | Sin ruta propia, el nodo responde directo por `eth0`: `curl` desde `client` a `10.81.0.2:8080` responde y a `10.80.0.2:30000` agota el tiempo. Con `ip route add 10.80.0.100/32 via 10.80.0.1` en el nodo, responde 200 en unos 0.2 ms |
+| `nstat`, tras 21 peticiones por el borde | El netns raíz cuenta 5 `IcmpOutRedirects`; el cliente, 0 `IcmpInRedirects`, y `ip route show cache` en el cliente queda vacío. Por qué el cliente no los cuenta no se investigó |
+| `curl` a `10.80.0.2:30000` desde `node1`, `node2` y `root` | `node1`, donde corre el servicio, y `node2` agotan 2 s; `root` responde 200 |
+
 ## Documentación oficial sin revisión fija (consultada el 6 nov 2026)
 
 | Fuente | Dato |

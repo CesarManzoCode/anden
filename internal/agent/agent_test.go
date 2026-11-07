@@ -367,3 +367,25 @@ func TestPrepareRootfsDoesNotFollowLinks(t *testing.T) {
 		t.Fatal("/etc as a symlink must be refused")
 	}
 }
+
+// Asks for all of memory.current. That the kernel's EAGAIN does not block needs a
+// real cgroup, and C7 is what proves it.
+func TestReclaimAsksForAllTheMemory(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "memory.current"), []byte("4096\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "memory.reclaim"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := reclaim(dir); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(filepath.Join(dir, "memory.reclaim"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "4096" {
+		t.Fatalf("memory.reclaim = %q", got)
+	}
+}
