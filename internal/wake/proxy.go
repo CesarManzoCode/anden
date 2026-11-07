@@ -9,7 +9,9 @@ import (
 	"log"
 	"net"
 	"net/netip"
+	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"unsafe"
@@ -111,9 +113,17 @@ func (p *Proxy) handle(ctx context.Context, client *net.TCPConn, phases *Phases,
 	var first func()
 	if owner {
 		var once sync.Once
-		// On its own goroutine: writing the event must not delay the rest of
-		// the answer, which the client is still timing.
-		record := func() { once.Do(func() { go m.act.Record(phases) }) }
+		// On its own goroutine: writing the event, and reading conntrack for
+		// the client's address, must not delay the rest of the answer, which
+		// the client is still timing.
+		record := func() {
+			once.Do(func() {
+				go func() {
+					phases.Client = clientAddr(client)
+					m.act.Record(phases)
+				}()
+			})
+		}
 		defer record()
 		first = func() {
 			phases.Mark(FirstByte)
@@ -226,4 +236,61 @@ func parseSockaddrIn(sa []byte) (netip.AddrPort, error) {
 	}
 	addr := netip.AddrFrom4([4]byte(sa[4:8]))
 	return netip.AddrPortFrom(addr, binary.BigEndian.Uint16(sa[2:4])), nil
+}
+
+// conntrackTable lists what conntrack follows in the netns of the reader. The
+// node netns is created inside the user namespace, whose root the agent is, so
+// the agent can read it.
+const conntrackTable = "/proc/net/nf_conntrack"
+
+// clientAddr is where conn came from before the redirect. The kernel keeps the
+// client's port unless the reply would clash with an entry still in conntrack,
+// such as the same client port toward another sleeping service less than two
+// minutes before: then it rewrites the source port, and RemoteAddr shows the
+// rewritten one. The entry whose reply is conn's keeps the original source.
+// Without that entry it is RemoteAddr.
+func clientAddr(conn *net.TCPConn) string {
+	remote := conn.RemoteAddr().String()
+	table, err := os.ReadFile(conntrackTable)
+	if err != nil {
+		return remote
+	}
+	local, lerr := netip.ParseAddrPort(conn.LocalAddr().String())
+	peer, perr := netip.ParseAddrPort(remote)
+	if lerr != nil || perr != nil {
+		return remote
+	}
+	if orig, ok := originalSource(string(table), local, peer); ok {
+		return orig.String()
+	}
+	return remote
+}
+
+// originalSource finds the tcp line of nf_conntrack whose reply goes from
+// local to peer and returns the source of its original direction. Each line
+// has src=, dst=, sport= and dport= twice: the original tuple, then the reply.
+func originalSource(table string, local, peer netip.AddrPort) (netip.AddrPort, bool) {
+	want := [4]string{local.Addr().String(), peer.Addr().String(),
+		strconv.Itoa(int(local.Port())), strconv.Itoa(int(peer.Port()))}
+	for line := range strings.Lines(table) {
+		fields := strings.Fields(line)
+		if len(fields) < 3 || fields[2] != "tcp" {
+			continue
+		}
+		vals := map[string][]string{}
+		for _, f := range fields {
+			if k, v, ok := strings.Cut(f, "="); ok {
+				vals[k] = append(vals[k], v)
+			}
+		}
+		src, dst, sport, dport := vals["src"], vals["dst"], vals["sport"], vals["dport"]
+		if len(src) != 2 || len(dst) != 2 || len(sport) != 2 || len(dport) != 2 ||
+			[4]string{src[1], dst[1], sport[1], dport[1]} != want {
+			continue
+		}
+		if orig, err := netip.ParseAddrPort(net.JoinHostPort(src[0], sport[0])); err == nil {
+			return orig, true
+		}
+	}
+	return netip.AddrPort{}, false
 }

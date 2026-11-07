@@ -254,6 +254,14 @@ No se ejecutó `promtool` sobre `ops/` ni sobre la salida de `/metrics` en esta 
 | `git clone -h` | git del sistema | `git clone [<options>] [--] <repo> [<dir>]`; un repositorio local se clona por ruta |
 | `unshare --help` | util-linux del sistema | `-U --map-root-user --map-auto`, ya usados por `lib.NS_PREFIX`; C28 los usa para borrar un clon con archivos de ids subordinados o modo 000. No se ejecutó ese borrado |
 
+## Puerto del cliente tras el `redirect` (ejecutado el 7 nov 2026, fixer de k6)
+
+| Fuente | Revisión | Dato usado |
+|---|---|---|
+| `.run/acceptance/c12/`, corrida de C12 que falló | kernel 7.2.14 | La medida 53 de `restore` salió del puerto 50028; su evento dice `10.80.0.100:22287`. El mismo puerto había despertado al servicio `relaunch`, en el mismo nodo, 119 s antes |
+| Conexiones reales con Python bajo `unshare -U --map-root-user` y luego `unshare -n`, con `ip daddr { 10.7.0.1, 10.7.0.2 } tcp dport 80 redirect to :15000` en `output` | kernel 7.2.14, nftables 1.1.7 | Dos `connect` desde `10.9.0.1:40000`, uno a cada destino: el proxy ve `40000` y luego `28448`. Las dos respuestas irían de `:15000` al mismo puerto del cliente, y la primera entrada sigue en conntrack en `TIME_WAIT` (`nf_conntrack_tcp_timeout_time_wait = 120`), así que el kernel reescribe el puerto de origen de la segunda |
+| `/proc/net/nf_conntrack`, leído en ese netns | kernel 7.2.14, `CONFIG_NF_CONNTRACK_PROCFS=y` | Cada línea trae `src= dst= sport= dport=` dos veces: la tupla original y luego la de respuesta. La segunda conexión aparece con `sport=40000` en la original y `dport=28448` en la respuesta. El archivo es del root del namespace de usuario si el netns se crea después de escribir el `uid_map`; con `unshare -U --map-root-user -n` en un solo paso es de `65534` y su lectura da `Permission denied`. Los netns de los nodos se crean con `CLONE_NEWNET` dentro del namespace ya mapeado |
+
 ## Documentación oficial sin revisión fija (consultada el 6 nov 2026)
 
 | Fuente | Dato |

@@ -723,6 +723,27 @@ func TestParseSockaddrIn(t *testing.T) {
 	}
 }
 
+func TestOriginalSource(t *testing.T) {
+	// What nf_conntrack showed when this was measured: two connections from
+	// port 40000 redirected to the same :15000; the second one's source port
+	// was rewritten to 28448 because its reply clashed with the first.
+	table := "ipv4     2 udp      17 29 src=10.9.0.1 dst=10.9.0.9 sport=40000 dport=53 src=127.0.0.1 dst=10.9.0.1 sport=15000 dport=28448 mark=0 zone=0 use=2\n" +
+		"ipv4     2 tcp      6 119 TIME_WAIT src=10.9.0.1 dst=10.7.0.1 sport=40000 dport=80 src=127.0.0.1 dst=10.9.0.1 sport=15000 dport=40000 [ASSURED] mark=0 zone=0 use=2\n" +
+		"ipv4     2 tcp      6 119 TIME_WAIT src=10.9.0.1 dst=10.7.0.2 sport=40000 dport=80 src=127.0.0.1 dst=10.9.0.1 sport=15000 dport=28448 [ASSURED] mark=0 zone=0 use=2\n"
+	local := netip.MustParseAddrPort("127.0.0.1:15000")
+	got, ok := originalSource(table, local, netip.MustParseAddrPort("10.9.0.1:28448"))
+	if !ok || got != netip.MustParseAddrPort("10.9.0.1:40000") {
+		t.Fatalf("rewritten port: got %s, %v", got, ok)
+	}
+	got, ok = originalSource(table, local, netip.MustParseAddrPort("10.9.0.1:40000"))
+	if !ok || got != netip.MustParseAddrPort("10.9.0.1:40000") {
+		t.Fatalf("kept port: got %s, %v", got, ok)
+	}
+	if got, ok := originalSource(table, local, netip.MustParseAddrPort("10.9.0.1:1")); ok {
+		t.Fatalf("no entry must not match, got %s", got)
+	}
+}
+
 func TestScripts(t *testing.T) {
 	rules := rulesScript()
 	for _, want := range []string{

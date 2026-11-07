@@ -27,6 +27,11 @@ Primera versión completa: lo que se construyó de K1 a K5 y se midió en esta m
 - Criterio de aceptación C30 (`acceptance/c30_design.py`), que comprueba que ese documento exista y tenga sus cuatro secciones.
 - El `README.md` explica cómo construir, levantar el datacenter y correr la verificación, y publica la última corrida de cada criterio.
 
+### Corregido
+
+- El `client_addr` de un despertar podía traer un puerto que el cliente no usó: el `redirect` a `:15000` reescribe el puerto de origen si la respuesta choca con otra entrada de conntrack, como el mismo puerto hacia otro servicio dormido menos de 120 s antes. C12 falló así una vez, con 99 de 100 despertares `restore` emparejados. Ahora el agente toma el origen de la tupla original en `/proc/net/nf_conntrack`.
+- La fila de C15 del `README.md` ya no trae la fracción 0.798, calculada a mano y ausente de la evidencia.
+
 ## K5: observabilidad, densidad y construcción (2026-11-07)
 
 ### Agregado

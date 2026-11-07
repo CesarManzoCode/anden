@@ -35,7 +35,7 @@ Medido (C13, n = 100 por fila, p50 / p99): `anden-relaunch` 55.3 / 66.0 ms y `an
 
 ### Desglose por fases que se puede auditar
 
-Cada despertar deja una línea en `wake_events.jsonl` con siete fases (`detection`, `placement`, `rootfs`, `network`, `start`, `readiness`, `first_byte`). Un desglose que nadie contrasta no vale; C12 compara la suma de las fases con lo que mide un cliente externo, y en 200 de 200 despertares (100 por ruta) quedó dentro de máx(5 ms, 10 %). Las mismas fases alimentan los histogramas `anden_wake_phase_seconds` y `anden_wake_duration_seconds` y la alerta `AndenWakeOverBudget`.
+Cada despertar deja una línea en `wake_events.jsonl` con siete fases (`detection`, `placement`, `rootfs`, `network`, `start`, `readiness`, `first_byte`). Un desglose que nadie contrasta no vale; C12 compara la suma de las fases con lo que mide un cliente externo, y en 200 de 200 despertares (100 por ruta) quedó dentro de máx(5 ms, 10 %). Una corrida posterior falló: emparejó solo 99 de 100 despertares `restore`, porque el `redirect` a `:15000` había reescrito el puerto del cliente al chocar en conntrack con una conexión anterior a otro servicio. Desde entonces el agente toma `client_addr` de la tupla original en `/proc/net/nf_conntrack`. Las mismas fases alimentan los histogramas `anden_wake_phase_seconds` y `anden_wake_duration_seconds` y la alerta `AndenWakeOverBudget`.
 
 ### Estado deseado durable y un reconciliador de nivel
 
