@@ -76,7 +76,14 @@ Fuente única de lo que Andén no demuestra. Ningún otro archivo los repite.
 
 ## Dormir y despertar
 
-- La ruta `restore` todavía no existe: un servicio con `wake_route = restore` despierta por `relaunch` y su instancia lo reporta en `route`.
+- La ruta `restore` está escrita (k3-01) pero no se ha ejecutado dentro del agente: la receta de D03 se observó en K0 fuera de Andén. Hasta que C12 a C14 la midan, que conserve la memoria es hipótesis.
+- La vista de montaje del volcado solo pone `/dev/null` del host, como dice D03, pero `anden-runtime` monta seis nodos en el `/dev` del contenedor (`null`, `zero`, `full`, `random`, `urandom`, `tty`). No se midió si CRIU sin root necesita ver los otros cinco.
+- Si la imagen no trae `/tmp`, `/proc`, `/dev` o `/dev/null`, el volcado los crea en el `upper/` de la instancia, porque son destino de un montaje de la vista.
+- `criu restore` corre dentro de la cgroup de la instancia: su memoria y sus procesos cuentan contra `memory.max` y `pids.max` del servicio. No se midió con qué límites deja de caber.
+- Solo cae a `relaunch` lo que falla antes de que `criu restore` termine bien. Un proceso restaurado que muere después deja la instancia en `FAILED`, como un arranque fallido.
+- Dormida con snapshot, la instancia conserva sus namespaces de red, UTS e IPC y su veth en `svc0`, con su IP configurada. Sin snapshot los libera, como `relaunch`.
+- El snapshot vive en la memoria del agente: si el agente se reinicia, o el servicio se mueve de nodo, el siguiente despertar es por `relaunch`. Las imágenes quedan en `snapshots/` hasta el siguiente volcado o el fin de la instancia.
+- `route_requested` solo queda en el registro del agente hasta que se escriba `wake_events.jsonl`; la API solo da `route`.
 - `wake_events.jsonl` y el desglose por fases todavía no se escriben (K3).
 - El sueño conserva `upper/` y la cgroup. Tras un `relaunch` el servicio pierde su memoria, pero ve los archivos que escribió; `/.anden/stdio.log` sí empieza vacío en cada arranque.
 - Un socket en `TIME_WAIT` no aborta el sueño, aunque el prompt del sprint pide abortar con todo lo que no sea `LISTEN`. Un `TIME_WAIT` no tiene proceso ni datos, y dura 60 s en el servicio que cerró primero, de modo que lo dejaría sin dormir ese tiempo. Cualquier otro estado sí aborta.

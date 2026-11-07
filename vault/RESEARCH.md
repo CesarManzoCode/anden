@@ -165,6 +165,16 @@ Lo no medido aquí: la cifra de 2 ms de sondeo es el intervalo pedido por D04, n
 | `nstat`, tras 21 peticiones por el borde | El netns raíz cuenta 5 `IcmpOutRedirects`; el cliente, 0 `IcmpInRedirects`, y `ip route show cache` en el cliente queda vacío. Por qué el cliente no los cuenta no se investigó |
 | `curl` a `10.80.0.2:30000` desde `node1`, `node2` y `root` | `node1`, donde corre el servicio, y `node2` agotan 2 s; `root` responde 200 |
 
+## Ruta restore (consultado el 6 nov 2026 para k3-01)
+
+| Fuente | Revisión | Dato usado |
+|---|---|---|
+| `criu --help` | `/usr/bin/criu` 4.2.1 | `-t\|--tree PID`, `-d\|--restore-detached`, `-R\|--leave-running` (sin él, las tareas no siguen tras el volcado), `--pidfile FILE` escribe el pid de la tarea raíz, `-W` toma por defecto el valor de `-D` (ahí quedan los registros de `-o`), `--unprivileged`, `--external RES`, `--inherit-fd fd[NUM]:RES`. La ayuda no lista el formato `net[inode]` de `--external`: viene de D03 y de `criu.txt` |
+| Go, `src/runtime/os_linux.go` | go1.27.3 instalado | Los hilos del runtime se crean con `CLONE_FS`: un `chroot` desde cualquier hilo vale para todos |
+| Go, `src/syscall/exec_linux.go` | go1.27.3 instalado | Con `UseCgroupFD` usa `clone3` con `CLONE_INTO_CGROUP` y conserva `Cloneflags` (por ejemplo `CLONE_NEWNS`) en las banderas de `clone3` |
+
+No se ejecutó nada de la ruta dentro del agente en esta sesión.
+
 ## Documentación oficial sin revisión fija (consultada el 6 nov 2026)
 
 | Fuente | Dato |

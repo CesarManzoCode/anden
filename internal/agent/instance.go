@@ -39,34 +39,46 @@ type paths struct {
 	dir, upper, work, merged, bundle string
 	netNS, utsNS, ipcNS              string
 	cgroup                           string
+	// snapshot holds the images of the restore route.
+	snapshot string
 }
 
 func instancePaths(state, cgroup, service string, generation uint64, id string) paths {
 	dir := filepath.Join(state, "instances", id)
 	return paths{
-		dir:    dir,
-		upper:  filepath.Join(dir, "upper"),
-		work:   filepath.Join(dir, "work"),
-		merged: filepath.Join(dir, "merged"),
-		bundle: filepath.Join(dir, "bundle"),
-		netNS:  filepath.Join(dir, "net.ns"),
-		utsNS:  filepath.Join(dir, "uts.ns"),
-		ipcNS:  filepath.Join(dir, "ipc.ns"),
-		cgroup: filepath.Join(cgroup, "svc-"+service+"-"+strconv.FormatUint(generation, 10)),
+		dir:      dir,
+		upper:    filepath.Join(dir, "upper"),
+		work:     filepath.Join(dir, "work"),
+		merged:   filepath.Join(dir, "merged"),
+		bundle:   filepath.Join(dir, "bundle"),
+		netNS:    filepath.Join(dir, "net.ns"),
+		utsNS:    filepath.Join(dir, "uts.ns"),
+		ipcNS:    filepath.Join(dir, "ipc.ns"),
+		cgroup:   filepath.Join(cgroup, "svc-"+service+"-"+strconv.FormatUint(generation, 10)),
+		snapshot: filepath.Join(state, "snapshots", id),
 	}
 }
 
 // instance is one instance of the node. It lives on while its service sleeps,
-// as the machine that wakes it. a.mu guards state, stopping, idle, nextSample
-// and sleepAfter.
+// as the machine that wakes it. a.mu guards state, route, stopping, idle,
+// nextSample and sleepAfter.
 type instance struct {
 	id, service         string
 	version, generation uint64
 	addr, route         string
-	seccomp             bool
-	paths               paths
-	assignment          *andenv1.Assignment
-	machine             *wake.Machine
+	// routeRequested is the wake_route of the spec; route is the one the last
+	// wake took.
+	routeRequested string
+	seccomp        bool
+	// pid is the root of a tree criu restored, which the runtime does not know,
+	// and 0 otherwise. hasSnapshot says the last sleep left one. Only the
+	// machine's Halt and Start, and stop after the machine closed, touch them.
+	pid         int
+	hasSnapshot bool
+
+	paths      paths
+	assignment *andenv1.Assignment
+	machine    *wake.Machine
 
 	state    andenv1.InstanceState
 	stopping bool
@@ -92,19 +104,20 @@ func (a *Agent) newInstance(ctx context.Context, as *andenv1.Assignment, asleep 
 	target := netip.AddrPortFrom(addr, uint16(spec.GetPort()))
 	ictx, cancel := context.WithCancel(ctx)
 	in := &instance{
-		id:         as.GetInstanceId(),
-		service:    spec.GetName(),
-		version:    as.GetVersion(),
-		generation: as.GetGeneration(),
-		addr:       as.GetAddr(),
-		route:      routeRelaunch,
-		seccomp:    seccompEnabled(spec),
-		paths:      instancePaths(a.cfg.State, a.cfg.Cgroup, spec.GetName(), as.GetGeneration(), as.GetInstanceId()),
-		assignment: as,
-		state:      andenv1.InstanceState_INSTANCE_STATE_STARTING,
-		cancel:     cancel,
-		ctx:        ictx,
-		started:    make(chan struct{}),
+		id:             as.GetInstanceId(),
+		service:        spec.GetName(),
+		version:        as.GetVersion(),
+		generation:     as.GetGeneration(),
+		addr:           as.GetAddr(),
+		route:          routeRelaunch,
+		seccomp:        seccompEnabled(spec),
+		routeRequested: requestedRoute(spec),
+		paths:          instancePaths(a.cfg.State, a.cfg.Cgroup, spec.GetName(), as.GetGeneration(), as.GetInstanceId()),
+		assignment:     as,
+		state:          andenv1.InstanceState_INSTANCE_STATE_STARTING,
+		cancel:         cancel,
+		ctx:            ictx,
+		started:        make(chan struct{}),
 	}
 	if seconds := spec.GetIdleSeconds(); seconds > 0 {
 		in.idle = wake.NewIdle(time.Duration(seconds)*time.Second, time.Now())
@@ -173,26 +186,69 @@ func (c *instanceControl) LiveSockets() (int, error) {
 }
 
 // Halt ends the processes and frees the network and the rootfs, keeping the
-// cgroup and the upper layer for the wake. The memory goes back last, when nothing
-// holds it anymore. Until it is done the instance is still reported as running.
+// cgroup and the upper layer for the wake. The restore route dumps them first
+// and, with a snapshot, keeps the network, UTS and IPC namespaces too. The memory
+// goes back last, when nothing holds it anymore. Until it is done the instance is
+// still reported as running.
 func (c *instanceControl) Halt() error {
-	c.a.declare(c.in, false)
-	c.a.terminate(c.in)
-	c.a.release(c.in)
-	if err := reclaim(c.in.paths.cgroup); err != nil {
-		log.Printf("instance %s: %v", c.in.id, err)
+	in := c.in
+	c.a.declare(in, false)
+	in.hasSnapshot = in.routeRequested == routeRestore && c.a.sleepByDump(in)
+	c.a.terminate(in)
+	in.pid = 0
+	if in.hasSnapshot {
+		unmount(in, in.paths.merged)
+	} else {
+		c.a.release(in)
 	}
-	c.a.setState(c.in, andenv1.InstanceState_INSTANCE_STATE_STOPPED)
-	log.Printf("instance %s: asleep", c.in.id)
+	if err := reclaim(in.paths.cgroup); err != nil {
+		log.Printf("instance %s: %v", in.id, err)
+	}
+	c.a.setState(in, andenv1.InstanceState_INSTANCE_STATE_STOPPED)
+	log.Printf("instance %s: asleep", in.id)
 	return nil
 }
 
-// Start relaunches the instance: its rootfs and network are made anew. The
-// control plane learns of it afterwards, so a wake does not wait for it.
+// Start wakes the instance by restore from its snapshot or by relaunch, where its
+// rootfs and network are made anew. The control plane learns of it afterwards,
+// so a wake does not wait for it.
 func (c *instanceControl) Start() error {
-	c.a.setState(c.in, andenv1.InstanceState_INSTANCE_STATE_STARTING)
-	c.a.declare(c.in, true)
-	return c.a.launch(c.in, c.in.assignment)
+	in := c.in
+	c.a.setState(in, andenv1.InstanceState_INSTANCE_STATE_STARTING)
+	c.a.declare(in, true)
+	snapshot := in.hasSnapshot
+	in.hasSnapshot = false
+	route, err := wakeBy(in.routeRequested, snapshot, func() error {
+		err := c.a.restore(in)
+		if err != nil {
+			log.Printf("instance %s: restore failed, relaunching: %v", in.id, err)
+		}
+		return err
+	}, func() error {
+		if in.routeRequested == routeRestore {
+			c.a.discardRestore(in)
+		}
+		return c.a.launch(in, in.assignment)
+	})
+	c.a.mu.Lock()
+	in.route = route
+	c.a.mu.Unlock()
+	log.Printf("instance %s: waking by %s, route_requested %s", in.id, route, in.routeRequested)
+	return err
+}
+
+// discardRestore removes what the restore route keeps or a failed restore left,
+// so that a relaunch finds nothing in its way. The images stay, for their logs,
+// until the next dump or the end of the instance.
+func (a *Agent) discardRestore(in *instance) {
+	if populated, _ := cgroupPopulated(in.paths.cgroup); populated {
+		if err := killCgroup(in.paths.cgroup); err != nil {
+			log.Printf("instance %s: %v", in.id, err)
+		}
+		waitEmpty(in.paths.cgroup, killTimeout)
+	}
+	in.pid = 0
+	a.release(in)
 }
 
 // Probe is a TCP connect from the node, as D04 asks, whatever the healthcheck.
@@ -559,8 +615,14 @@ func (a *Agent) stop(in *instance) {
 func (a *Agent) terminate(in *instance) {
 	p := in.paths
 	if populated, _ := cgroupPopulated(p.cgroup); populated {
-		// It fails when create never finished; cgroup.kill covers that.
-		_ = exec.Command(a.cfg.Runtime, a.runtimeArgs("kill", in.id, "TERM")...).Run()
+		if in.pid > 0 {
+			// Restored: the runtime does not know it. It is the init of the
+			// pid namespace, and the cgroup would be empty without it.
+			_ = syscall.Kill(in.pid, syscall.SIGTERM)
+		} else {
+			// It fails when create never finished; cgroup.kill covers that.
+			_ = exec.Command(a.cfg.Runtime, a.runtimeArgs("kill", in.id, "TERM")...).Run()
+		}
 		if !waitEmpty(p.cgroup, stopGrace) {
 			if err := killCgroup(p.cgroup); err != nil && !errors.Is(err, os.ErrNotExist) {
 				log.Printf("instance %s: %v", in.id, err)
@@ -578,8 +640,10 @@ func (a *Agent) terminate(in *instance) {
 func (a *Agent) teardown(in *instance) {
 	p := in.paths
 	a.release(in)
-	if err := os.RemoveAll(p.dir); err != nil {
-		log.Printf("instance %s: %v", in.id, err)
+	for _, dir := range []string{p.dir, p.snapshot} {
+		if err := os.RemoveAll(dir); err != nil {
+			log.Printf("instance %s: %v", in.id, err)
+		}
 	}
 	if err := removeCgroup(p.cgroup); err != nil {
 		log.Printf("instance %s: %v", in.id, err)
@@ -593,7 +657,12 @@ func (a *Agent) release(in *instance) {
 	// Explicitly, and not through the namespace: the kernel destroys a netns
 	// asynchronously, and the same instance id takes this name when it wakes.
 	_ = exec.Command("ip", "link", "del", host).Run()
-	for _, target := range []string{p.netNS, p.utsNS, p.ipcNS, p.merged} {
+	unmount(in, p.netNS, p.utsNS, p.ipcNS, p.merged)
+}
+
+// unmount detaches each target that is mounted.
+func unmount(in *instance, targets ...string) {
+	for _, target := range targets {
 		err := syscall.Unmount(target, syscall.MNT_DETACH)
 		if err != nil && !errors.Is(err, syscall.EINVAL) && !errors.Is(err, syscall.ENOENT) {
 			log.Printf("instance %s: unmount %s: %v", in.id, target, err)

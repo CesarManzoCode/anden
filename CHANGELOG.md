@@ -62,6 +62,7 @@
 - Contrato del sistema, con decisiones cerradas de lenguaje, arquitectura, rutas de despertar, proxy, simulador, colocación y fencing.
 - Investigación con fuentes primarias y versiones de herramientas verificadas en la máquina de destino.
 - Comando único de chequeo (`make check`) y CI que lo corre.
+- Un servicio con `wake_route = restore` duerme con un volcado de CRIU y despierta restaurándolo, con su memoria. Si el volcado falla duerme como `relaunch`; si el snapshot falta o la restauración falla, despierta por `relaunch`. La instancia reporta en `route` la ruta que usó y corre sin seccomp (`seccomp = false`).
 
 ### Decisiones
 

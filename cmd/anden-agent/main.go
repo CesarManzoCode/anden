@@ -19,6 +19,12 @@ func main() {
 }
 
 func run(args []string, stderr io.Writer) int {
+	// The agent runs itself with this to dump or restore an instance with criu.
+	if len(args) == 2 && args[0] == agent.CheckpointCommand {
+		err := agent.RunCheckpoint(args[1])
+		fmt.Fprintln(stderr, "anden-agent:", err)
+		return 1
+	}
 	flags := flag.NewFlagSet("anden-agent", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	var cfg agent.Config
