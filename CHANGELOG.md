@@ -65,6 +65,9 @@
 - Un servicio con `wake_route = restore` duerme con un volcado de CRIU y despierta restaurándolo, con su memoria. Si el volcado falla duerme como `relaunch`; si el snapshot falta o la restauración falla, despierta por `relaunch`. La instancia reporta en `route` la ruta que usó y corre sin seccomp (`seccomp = false`).
 - Cada despertar escribe una línea en `nodes/nodeN/wake_events.jsonl` con la ruta usada, la pedida, la dirección del cliente que lo provocó, el instante del `accept` en `CLOCK_MONOTONIC` y siete fases en milisegundos: `detection`, `placement`, `rootfs`, `network`, `start`, `readiness` y `first_byte`. Un despertar avisa al plano de control y espera su respuesta hasta 200 ms antes de seguir en el nodo.
 - Criterio de aceptación C12 (`acceptance/c12_phases.py`).
+- `andend` responde DNS en `10.80.0.1:53`, por UDP y TCP: `<servicio>.anden.internal` da un registro A con TTL 1 hacia la dirección del servicio, despierto o dormido, y cualquier otro nombre da NXDOMAIN.
+- `MoveService` duerme el servicio si estaba despierto, le da una dirección del nodo destino y lo deja dormido allí: el borde, el DNS y el set `sleeping` de ambos nodos siguen la dirección nueva, y el siguiente despertar ocurre en el nodo destino. `GetService` muestra el nodo y la dirección de un servicio dormido.
+- Criterio de aceptación C11 (`acceptance/c11_discovery.py`).
 
 ### Decisiones
 

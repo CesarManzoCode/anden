@@ -283,8 +283,10 @@ func (a *andenService) DeployService(ctx context.Context, req *andenv1.DeploySer
 	return a.reply(ctx, svc, err)
 }
 
-// MoveService places the service on another node, in a new generation and with
-// an address of that node's subnet, which the next reconciler pass assigns.
+// MoveService makes another node the home of the service, in a new generation
+// and with an address of that node's subnet, which the next reconciler pass
+// assigns; the edge and the DNS follow the address. The service moves asleep:
+// an awake one sleeps first, and its next wake happens in the new home (D22).
 func (a *andenService) MoveService(ctx context.Context, req *andenv1.MoveServiceRequest) (*andenv1.Service, error) {
 	nodes, err := a.cp.store.ListNodes(ctx)
 	if err != nil {
@@ -298,13 +300,22 @@ func (a *andenService) MoveService(ctx context.Context, req *andenv1.MoveService
 		return nil, status.Errorf(codes.NotFound, "node %q is not registered", req.GetNode())
 	}
 	svc, err := a.cp.store.UpdateDesired(ctx, req.GetName(), func(s *store.Service) error {
-		if s.DesiredNode != req.GetNode() {
-			s.DesiredNode, s.DesiredAddr = req.GetNode(), ""
-			s.Generation++
-		}
+		moveTo(s, req.GetNode())
 		return nil
 	})
 	return a.reply(ctx, svc, err)
+}
+
+// moveTo is the desired change of a move: asleep, with node as home and no
+// address until the reconciler gives one of that node. Moving to the same home
+// changes nothing.
+func moveTo(s *store.Service, node string) {
+	if s.DesiredNode == node {
+		return
+	}
+	wantAsleep(s)
+	s.DesiredNode, s.DesiredAddr = node, ""
+	s.Generation++
 }
 
 func (a *andenService) ListNodes(ctx context.Context, _ *andenv1.ListNodesRequest) (*andenv1.ListNodesResponse, error) {

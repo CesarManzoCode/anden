@@ -57,7 +57,11 @@ Fuente única de lo que Andén no demuestra. Ningún otro archivo los repite.
 
 - La colocación es provisional: el primer nodo listo con CPU y memoria libres. No hay anti-afinidad ni best-fit (K4), y un servicio que no cabe en ningún nodo se queda en `CREATING` sin error.
 - Un nodo caído no recoloca sus servicios, y el agente no se autofencia todavía: sin plano de control sigue con lo que tiene.
-- `DeployService` para la instancia vieja y luego arranca la nueva, con tiempo sin servicio: todavía no sigue D24. `MoveService` hace lo mismo y cambia la dirección del servicio; no conserva nada de la instancia anterior.
+- `DeployService` para la instancia vieja y luego arranca la nueva, con tiempo sin servicio: todavía no sigue D24.
+- `MoveService` deja el servicio dormido en su nuevo hogar. Una instancia despierta no pasa por el volcado: se para, así que un servicio `restore` pierde su memoria al moverse y despierta en el nodo nuevo por `relaunch`.
+- Entre `MoveService` y la siguiente pasada del reconciliador (hasta 200 ms) el servicio no tiene dirección: el DNS responde NXDOMAIN y el borde no tiene su puerto. La dirección vieja queda libre en ese momento, aunque la instancia del nodo anterior todavía se esté parando.
+- El DNS (`10.80.0.1:53`) solo conoce `<servicio>.anden.internal`: no reenvía a otro servidor ni hace recursión, responde NXDOMAIN a cualquier otro nombre y no tiene registros AAAA ni SRV. No tiene autenticación ni límite de consultas.
+- El DNS lee la copia en memoria que el reconciliador renueva en cada pasada. Un cambio de dirección tarda hasta una pasada más el TTL de 1 s en llegar a un cliente, y tras reiniciar `andend` el DNS responde NXDOMAIN hasta la primera pasada.
 - Una instancia que muere queda en `FAILED`, con su cgroup y su rootfs para inspección, y no se reinicia sola: la reemplaza `WakeService`, `DeployService` o `MoveService`.
 - Cada latido lleva todas las asignaciones del nodo y lee Postgres. No está medido cuánto cuesta con muchos servicios.
 - El servidor de blobs (`10.80.0.1:7444`) y la API para agentes no tienen autenticación: su única frontera es la red simulada.

@@ -4,6 +4,7 @@ go 1.27
 
 require (
 	github.com/jackc/pgx/v5 v5.12.0
+	github.com/miekg/dns v1.1.73
 	google.golang.org/grpc v1.85.0
 	google.golang.org/protobuf v1.36.12
 )

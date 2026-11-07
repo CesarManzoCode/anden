@@ -14,6 +14,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	andenv1 "github.com/CesarManzoCode/anden/gen/anden/v1"
+	"github.com/CesarManzoCode/anden/internal/dns"
 	"github.com/CesarManzoCode/anden/internal/store"
 )
 
@@ -251,6 +252,8 @@ func TestPassPlaces(t *testing.T) {
 		"b":   {"node2", "10.82.0.2"},
 		"c":   {"node1", "10.81.0.3"},
 		"big": {"", ""},
+		// Asleep, but with a home: its address follows it there.
+		"moved": {"node2", "10.82.0.3"},
 	} {
 		if got := m.services[name]; got.DesiredNode != want[0] || got.DesiredAddr != want[1] {
 			t.Errorf("%s on %q at %q, want %v", name, got.DesiredNode, got.DesiredAddr, want)
@@ -278,6 +281,90 @@ func TestPassPlacesMovedServiceInItsNodeSubnet(t *testing.T) {
 	}
 	if got := m.services["a"]; got.DesiredNode != "node2" || got.DesiredAddr != "10.82.0.2" {
 		t.Fatalf("%+v", got)
+	}
+}
+
+func TestMoveTo(t *testing.T) {
+	asleep := store.Service{DesiredNode: "node1", DesiredAddr: "10.81.0.2", Generation: 3, State: stateAsleep}
+	moveTo(&asleep, "node2")
+	if asleep.DesiredNode != "node2" || asleep.DesiredAddr != "" || asleep.Generation != 4 || asleep.DesiredAwake || asleep.State != stateAsleep {
+		t.Errorf("asleep: %+v", asleep)
+	}
+	awake := store.Service{DesiredNode: "node1", DesiredAddr: "10.81.0.2", Generation: 1, DesiredAwake: true, State: stateActive}
+	moveTo(&awake, "node3")
+	if awake.DesiredNode != "node3" || awake.DesiredAddr != "" || awake.Generation != 2 || awake.DesiredAwake || awake.State != stateSleeping {
+		t.Errorf("an awake service sleeps before it moves: %+v", awake)
+	}
+	same := store.Service{DesiredNode: "node1", DesiredAddr: "10.81.0.2", Generation: 1, DesiredAwake: true, State: stateActive}
+	moveTo(&same, "node1")
+	if same.DesiredNode != "node1" || same.DesiredAddr != "10.81.0.2" || same.Generation != 1 || !same.DesiredAwake || same.State != stateActive {
+		t.Errorf("a move to the same home changed %+v", same)
+	}
+}
+
+func TestPassMovesSleepingAddress(t *testing.T) {
+	m := &memState{nodes: twoNodes(), services: map[string]store.Service{
+		"other": {Name: "other", Revision: 1, DesiredAwake: true, DesiredNode: "node2", DesiredAddr: "10.82.0.2", State: stateActive,
+			EdgePort: 30000, Spec: specBytes(t, 100, 100, 80)},
+		"web": {Name: "web", Revision: 1, DesiredNode: "node1", DesiredAddr: "10.81.0.2", Generation: 1, State: stateAsleep,
+			Node: "node1", Addr: "10.81.0.2", EdgePort: 30001, Spec: specBytes(t, 100, 100, 8080)},
+	}}
+	var scripts []string
+	r := NewReconciler(m)
+	r.edge = &Edge{ip: "10.80.0.2", apply: func(s string) error { scripts = append(scripts, s); return nil }}
+	r.records = dns.NewRecords()
+	if err := r.Pass(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if addr, ok := r.records.Lookup("web"); !ok || addr.String() != "10.81.0.2" {
+		t.Fatalf("before the move: %v %v", addr, ok)
+	}
+
+	web := m.services["web"]
+	moveTo(&web, "node2")
+	web.Revision++
+	m.services["web"] = web
+	if err := r.Pass(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	got := m.services["web"]
+	if got.DesiredNode != "node2" || got.DesiredAddr != "10.82.0.3" || got.Generation != 2 || got.DesiredAwake {
+		t.Fatalf("placement after the move: %+v", got)
+	}
+	if got.State != stateAsleep || got.Node != "node2" || got.Addr != "10.82.0.3" {
+		t.Errorf("observed after the move: %+v", got)
+	}
+	if addr, ok := r.records.Lookup("web"); !ok || addr.String() != "10.82.0.3" {
+		t.Errorf("DNS after the move: %v %v", addr, ok)
+	}
+	if last := scripts[len(scripts)-1]; !strings.Contains(last, "add element ip anden_edge svc { 30001 : 10.82.0.3 . 8080 }") {
+		t.Errorf("edge after the move: %s", last)
+	}
+	// The new home gets web asleep, so its agent puts it in its sleeping set;
+	// the old one no longer gets it, so its agent takes it out of its own.
+	as, err := toAssignments([]store.Service{got})
+	if err != nil || as[0].GetAwake() || as[0].GetAddr() != "10.82.0.3" || as[0].GetInstanceId() != "web-2" {
+		t.Errorf("assignment on node2: %v %v", as, err)
+	}
+}
+
+func TestDNSRecords(t *testing.T) {
+	got := dnsRecords([]store.Service{
+		{Name: "awake", DesiredAddr: "10.81.0.2", DesiredAwake: true},
+		{Name: "asleep", DesiredAddr: "10.82.0.2"},
+		{Name: "unplaced"},
+		{Name: "deleted", DesiredAddr: "10.83.0.2", Deleted: true},
+	})
+	if len(got) != 2 || got["awake"].String() != "10.81.0.2" || got["asleep"].String() != "10.82.0.2" {
+		t.Fatalf("%v", got)
+	}
+}
+
+func TestDecideAsleepIsAtItsHome(t *testing.T) {
+	svc := store.Service{DesiredNode: "node2", DesiredAddr: "10.82.0.3", State: stateAsleep, Node: "node1", Addr: "10.81.0.2"}
+	obs, _ := Decide(svc, nil)
+	if obs.State != stateAsleep || obs.Node != "node2" || obs.Addr != "10.82.0.3" {
+		t.Fatalf("%+v", obs)
 	}
 }
 

@@ -3,6 +3,7 @@ package controlplane
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -14,6 +15,7 @@ import (
 	"google.golang.org/grpc"
 
 	andenv1 "github.com/CesarManzoCode/anden/gen/anden/v1"
+	"github.com/CesarManzoCode/anden/internal/dns"
 	"github.com/CesarManzoCode/anden/internal/store"
 )
 
@@ -25,6 +27,8 @@ type Options struct {
 	BlobsListen string
 	// EdgeIP is the address of the edge of D21.
 	EdgeIP string
+	// DNSListen is the UDP and TCP address of the DNS of D22.
+	DNSListen string
 }
 
 type ControlPlane struct {
@@ -39,6 +43,9 @@ func New(st *store.Store, opts Options) *ControlPlane {
 	c.rec.ready = c.live.ready
 	if opts.EdgeIP != "" {
 		c.rec.edge = NewEdge(opts.EdgeIP)
+	}
+	if opts.DNSListen != "" {
+		c.rec.records = dns.NewRecords()
 	}
 	return c
 }
@@ -104,6 +111,28 @@ func (c *ControlPlane) Serve(ctx context.Context, unixPath, tcpAddr string, inte
 		go func() {
 			if err := blobs.Serve(bl); !errors.Is(err, http.ErrServerClosed) {
 				log.Printf("blob server: %v", err)
+			}
+		}()
+	}
+
+	if c.opts.DNSListen != "" {
+		names, err := dns.Listen(c.opts.DNSListen, c.rec.records)
+		if err != nil {
+			for _, l := range listeners {
+				l.Close()
+			}
+			return fmt.Errorf("dns: %w", err)
+		}
+		dnsCtx, stopDNS := context.WithCancel(ctx)
+		dnsDone := make(chan struct{})
+		defer func() {
+			stopDNS()
+			<-dnsDone
+		}()
+		go func() {
+			defer close(dnsDone)
+			if err := names.Serve(dnsCtx); err != nil {
+				log.Printf("dns: %v", err)
 			}
 		}()
 	}

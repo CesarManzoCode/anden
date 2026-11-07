@@ -7,11 +7,13 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net/netip"
 	"time"
 
 	"google.golang.org/protobuf/proto"
 
 	andenv1 "github.com/CesarManzoCode/anden/gen/anden/v1"
+	"github.com/CesarManzoCode/anden/internal/dns"
 	"github.com/CesarManzoCode/anden/internal/store"
 )
 
@@ -51,6 +53,8 @@ type Reconciler struct {
 	ready func(node string) bool
 	// edge is nil when andend runs without an edge address.
 	edge *Edge
+	// records are the names the DNS answers (D22); nil without a DNS.
+	records *dns.Records
 }
 
 func NewReconciler(state State) *Reconciler {
@@ -95,6 +99,9 @@ func (r *Reconciler) Pass(ctx context.Context) error {
 	if err := r.place(ctx, services); err != nil {
 		return err
 	}
+	if r.records != nil {
+		r.records.Replace(dnsRecords(services))
+	}
 	byService := map[string][]store.Instance{}
 	for _, in := range instances {
 		byService[in.Service] = append(byService[in.Service], in)
@@ -130,9 +137,10 @@ func specOf(svc store.Service) (*andenv1.ServiceSpec, error) {
 	return spec, nil
 }
 
-// place gives a node and an address to every awake service without an address
-// and records them in services. A service that fits nowhere waits for a later
-// pass; lost revision races too.
+// place gives a node and an address to every awake service without an address,
+// and an address of its home to a sleeping one that moved, and records them in
+// services. A service that fits nowhere waits for a later pass; lost revision
+// races too.
 func (r *Reconciler) place(ctx context.Context, services []store.Service) error {
 	nodes, err := r.state.ListNodes(ctx)
 	if err != nil {
@@ -162,7 +170,9 @@ func (r *Reconciler) place(ctx context.Context, services []store.Service) error 
 	}
 	for i := range services {
 		svc := &services[i]
-		if svc.Deleted || !svc.DesiredAwake || svc.DesiredAddr != "" {
+		// What sleeps is placed only once it has a home: MoveService gives
+		// it one, and its address must follow there (D22).
+		if svc.Deleted || svc.DesiredAddr != "" || (!svc.DesiredAwake && svc.DesiredNode == "") {
 			continue
 		}
 		node := svc.DesiredNode
@@ -209,6 +219,21 @@ func edgeTargets(services []store.Service) (map[int32]edgeTarget, error) {
 		want[svc.EdgePort] = edgeTarget{addr: svc.DesiredAddr, port: spec.GetPort()}
 	}
 	return want, nil
+}
+
+// dnsRecords is the address of every live service that has one, awake or not:
+// a sleeping service resolves to its reserved address, which wakes it (D22).
+func dnsRecords(services []store.Service) map[string]netip.Addr {
+	out := map[string]netip.Addr{}
+	for _, svc := range services {
+		if svc.Deleted || svc.DesiredAddr == "" {
+			continue
+		}
+		if addr, err := netip.ParseAddr(svc.DesiredAddr); err == nil {
+			out[svc.Name] = addr
+		}
+	}
+	return out
 }
 
 // InstanceID names the instance of a generation: <service>-<generation>.
@@ -265,8 +290,13 @@ func Decide(svc store.Service, instances []store.Instance) (store.Observed, bool
 		return obs, !alive
 	}
 	live := liveInstance(instances)
-	if live != nil {
+	switch {
+	case live != nil:
 		obs.Node, obs.Addr = live.Node, live.Addr
+	case svc.DesiredAddr != "":
+		// Without an instance the service is where it would wake: its home
+		// and its reserved address, which change when it moves.
+		obs.Node, obs.Addr = svc.DesiredNode, svc.DesiredAddr
 	}
 	switch {
 	case !svc.DesiredAwake && live != nil:

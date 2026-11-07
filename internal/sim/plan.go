@@ -24,6 +24,7 @@ const (
 	ClientIP   = "10.80.0.100"
 	AgentPort  = 7443
 	BlobsPort  = 7444
+	DNSPort    = 53
 	ClientName = "client"
 	RootName   = "root"
 
@@ -232,6 +233,7 @@ func AndendArgs(state, sockets string) []string {
 		"--registry", filepath.Join(state, "registry"),
 		"--blobs-listen", RootIP + ":" + strconv.Itoa(BlobsPort),
 		"--edge-ip", EdgeIP,
+		"--dns-listen", RootIP + ":" + strconv.Itoa(DNSPort),
 	}
 }
 

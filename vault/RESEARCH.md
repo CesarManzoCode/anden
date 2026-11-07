@@ -185,6 +185,16 @@ No se ejecutó nada de la ruta dentro del agente en esta sesión.
 
 Que los netns del datacenter compartan ese reloj con el host se razonó (no se crea namespace de tiempo), no se midió.
 
+## DNS y movimiento (consultado el 6 nov 2026 para k3-03)
+
+| Fuente | Revisión | Dato usado |
+|---|---|---|
+| `github.com/miekg/dns`, código del módulo en la caché (`server.go`, `defaults.go`, `types.go`, `client.go`) | v1.1.73 | `Server{PacketConn, Listener, Handler}` con `ActivateAndServe`; `Shutdown` falla con `server not started` si el servidor no arrancó todavía, y cerrar el socket termina `serveUDP` y `serveTCP` con error; `Msg.SetReply` copia el id, el opcode y la primera pregunta y deja `RcodeSuccess`; `RcodeNameError` es NXDOMAIN; `A{Hdr: RR_Header{Name, Rrtype, Class, Ttl}, A net.IP}`; `Client{Net: "udp"\|"tcp", Timeout}.Exchange(m, addr)` |
+| `go get github.com/miekg/dns@v1.1.73` con `GOPROXY=off` y `go mod tidy -diff` | go1.27.3 | Sus requisitos (`x/net` v0.57.0, `x/sync` v0.22.0, `x/sys` v0.47.0) son menores que los del módulo, así que no suben ninguna versión; `go.sum` solo suma las dos líneas de `miekg/dns` |
+| `dig -h` | BIND 9.20.30 | `dig [@global-server] [domain] ... +[no]short` |
+
+No se ejecutó el servidor DNS ni C11 en esta sesión.
+
 ## Documentación oficial sin revisión fija (consultada el 6 nov 2026)
 
 | Fuente | Dato |

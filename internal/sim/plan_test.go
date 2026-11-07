@@ -156,7 +156,8 @@ func TestCommandLines(t *testing.T) {
 	}
 	if got := AndendArgs("/s", "/run/user/1000/anden-h"); !reflect.DeepEqual(got, []string{
 		"--api-socket", "/run/user/1000/anden-h/api.sock", "--listen", "10.80.0.1:7443", "--pg-socket-dir", "/run/user/1000/anden-h",
-		"--registry", "/s/registry", "--blobs-listen", "10.80.0.1:7444", "--edge-ip", "10.80.0.2"}) {
+		"--registry", "/s/registry", "--blobs-listen", "10.80.0.1:7444", "--edge-ip", "10.80.0.2",
+		"--dns-listen", "10.80.0.1:53"}) {
 		t.Fatalf("AndendArgs = %q", got)
 	}
 	if got := ExecArgs(42, []string{"nft", "list", "tables"}); !reflect.DeepEqual(got, []string{
