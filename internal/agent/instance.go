@@ -297,7 +297,13 @@ func (a *Agent) launch(in *instance, as *andenv1.Assignment) error {
 	if err := a.setupNetwork(in); err != nil {
 		return fmt.Errorf("network: %w", err)
 	}
-	config, err := buildConfig(configInput{spec: spec, run: img.Run, rootfs: p.merged, netNS: p.netNS, utsNS: p.utsNS, ipcNS: p.ipcNS, cgroup: p.cgroup})
+	volumes := filepath.Join(a.cfg.State, "volumes")
+	for _, v := range spec.GetVolumes() {
+		if err := os.MkdirAll(filepath.Join(volumes, v.GetName()), 0o755); err != nil {
+			return err
+		}
+	}
+	config, err := buildConfig(configInput{spec: spec, run: img.Run, rootfs: p.merged, netNS: p.netNS, utsNS: p.utsNS, ipcNS: p.ipcNS, cgroup: p.cgroup, volumes: volumes})
 	if err != nil {
 		return err
 	}

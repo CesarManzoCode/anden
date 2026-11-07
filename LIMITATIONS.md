@@ -66,7 +66,7 @@ Fuente única de lo que Andén no demuestra. Ningún otro archivo los repite.
 
 ## Instancias
 
-- Los volúmenes de `ServiceSpec` se aceptan y se guardan, pero el agente todavía no los monta.
+- Un volumen es un directorio del nodo, `nodes/nodeN/volumes/<nombre>/`, montado con bind. Lo comparten los servicios del mismo nodo que usen ese nombre, sobrevive a dormir y despertar, no tiene cuota, no se borra con el servicio y no sigue a un servicio que cambie de nodo.
 - El contenedor corre como uid 0 del namespace: el campo `User` de la imagen se ignora.
 - Solo monta `/proc` y `/dev` (el `tmpfs` y los nodos del runtime). No hay `/sys`, `/dev/shm` ni `/dev/pts`.
 - `memory.swap.max` queda en 0 en toda instancia: una instancia no usa swap aunque el nodo lo tenga.
@@ -110,6 +110,13 @@ Fuente única de lo que Andén no demuestra. Ningún otro archivo los repite.
 - C20 compara solo alpine, nginx y la imagen sintética. Que el rootfs sea igual al de umoci no está medido en ninguna otra imagen.
 - C21 solo mide un byte cambiado en una capa ya importada, y el rechazo al usarlo solo se observa en `anden image unpack`. No se midieron un blob truncado o faltante, ni un rechazo en `mount`.
 - C22 mide la deduplicación con `du -sb` sobre `blobs/` y con un solo par de imágenes, nginx y nginx-perl, que comparten 7 capas. No mide con `du` las capas extraídas en `layers/<diffid>/`.
+
+## Alcance de lo medido en K2
+
+- C8 mide `echosvc` con una petición GET por despertar, sin carga generada por el script y por la ruta `relaunch`. No dice nada de un servicio que tarde más en escuchar.
+- C8 en caché fría solo existe si `sudo -n` funciona en la corrida. `drop_caches` vacía la caché de toda la máquina, no solo la del servicio.
+- C9 mide HTTP con `echosvc`: 32 clientes, 5 rondas y una conexión por petición. No mide conexiones que transfieran mucho ni que vivan mucho durante el despertar.
+- C10 solo mide `PING`, `SET` y `GET` de `redis-cli` contra Valkey, con conexiones nuevas y sin persistencia: un `SET` no sobrevive al sueño con `relaunch`, y no se mide un servicio TCP con persistencia.
 
 ## Sin demostrar todavía
 

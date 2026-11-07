@@ -1,6 +1,7 @@
 """Shared by the acceptance scripts: tree stamp, reports, the D09 namespace prefix, permissions, cache paths, the datacenter."""
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
@@ -16,12 +17,16 @@ NS_PREFIX = ["systemd-run", "--user", "--scope", "-q", "-p", "Delegate=yes", "--
              "--fork", "--kill-child", "--mount-proc"]
 ANDEN = ROOT / "bin" / "anden"
 MKIMAGE = ROOT / "bin" / "mkimage"
+WAKECLIENT = ROOT / "bin" / "wakeclient"
+GOVERNOR_PATH = Path("/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor")
 ACTIVE = "SERVICE_STATE_ACTIVE"
 FAILED = "SERVICE_STATE_FAILED"
 ASLEEP = "SERVICE_STATE_ASLEEP"
 ECHO_PORT = 8080
 UP_TIMEOUT_SECONDS = 180
 ACTIVE_TIMEOUT_SECONDS = 60
+SLEEP_TIMEOUT_SECONDS = 30
+MEASURE_TIMEOUT_SECONDS = 60
 NODE_COUNT = 3
 # Runs in the client netns: one new connection per request, so that each one crosses the edge.
 LOAD_SCRIPT = """
@@ -149,6 +154,29 @@ def node_cpu_millis():
     return len(os.sched_getaffinity(0)) * 1000 // NODE_COUNT
 
 
+def governor():
+    """CPU frequency governor, or `unavailable` where the kernel exposes none."""
+    try:
+        return GOVERNOR_PATH.read_text().strip()
+    except OSError:
+        return "unavailable"
+
+
+def disk_fstype():
+    """Filesystem of the disk under the repository, where the state of a datacenter lives."""
+    return subprocess.run(["findmnt", "-no", "FSTYPE", "--target", str(ROOT)], capture_output=True, text=True,
+                          stdin=subprocess.DEVNULL, check=True).stdout.strip()
+
+
+def percentiles(samples):
+    """p50, p90, p99 (nearest rank) and max of a list of samples; None for each if it is empty."""
+    ordered = sorted(samples)
+    if not ordered:
+        return {"p50": None, "p90": None, "p99": None, "max": None}
+    rank = lambda pct: ordered[max(1, math.ceil(pct * len(ordered) / 100)) - 1]
+    return {"p50": rank(50), "p90": rank(90), "p99": rank(99), "max": ordered[-1]}
+
+
 class CommandError(RuntimeError):
     pass
 
@@ -210,20 +238,25 @@ class Datacenter:
     def status(self):
         return json.loads(self._checked("status", "--json"))
 
-    def import_binary(self, binary, raw_dir):
-        """Packs bin/<binary> in a one layer image, imports it and returns its digest."""
-        layout = Path(raw_dir) / f"image-{binary}"
+    def import_pack(self, binary_path, raw_dir, cmd=()):
+        """Packs a binary in a one layer image with this Cmd, imports it and returns its digest."""
+        layout = Path(raw_dir) / f"image-{Path(binary_path).name}"
         shutil.rmtree(layout, ignore_errors=True)
-        subprocess.run([str(MKIMAGE), "pack", "--bin", str(ROOT / "bin" / binary), "--out", str(layout), "--tag", "latest"],
+        cmd_flags = [flag for arg in cmd for flag in ("--cmd", arg)]
+        subprocess.run([str(MKIMAGE), "pack", "--bin", str(binary_path), "--out", str(layout), "--tag", "latest", *cmd_flags],
                        check=True, capture_output=True, stdin=subprocess.DEVNULL)
         out = self._checked("image", "import", "--layout", f"{layout}:latest", "--json")
         return json.loads(out)["digest"]
 
-    def create_echo(self, name, digest, cpu_millis=200, memory_mib=64, pids_max=0, idle_seconds=0):
+    def import_binary(self, binary, raw_dir):
+        """Packs bin/<binary> in a one layer image, imports it and returns its digest."""
+        return self.import_pack(ROOT / "bin" / binary, raw_dir)
+
+    def create_echo(self, name, digest, cpu_millis=200, memory_mib=64, pids_max=0, idle_seconds=0, extra=()):
         """Creates an echosvc, by default one that never sleeps, and waits until it answers."""
         self.svc("create", "--name", name, "--image", digest, "--port", str(ECHO_PORT), "--cpu-millis", str(cpu_millis),
                  "--memory-mib", str(memory_mib), "--pids-max", str(pids_max), "--idle-seconds", str(idle_seconds),
-                 "--env", f"PORT={ECHO_PORT}")
+                 "--env", f"PORT={ECHO_PORT}", *extra)
         return self.wait_state(name, ACTIVE, ACTIVE_TIMEOUT_SECONDS)
 
     def wait_state(self, name, state, timeout):
@@ -235,6 +268,42 @@ class Datacenter:
             if time.monotonic() > deadline:
                 raise CommandError(f"{name} is {svc['state']} after {timeout} s, expected {state}")
             time.sleep(0.1)
+
+    def sleep_confirmed(self, name):
+        """SleepService on an ACTIVE service, and waits for ASLEEP. It starts from ACTIVE because the API goes behind the
+        node: a service that a connection just woke can still read ASLEEP, and that would confirm nothing."""
+        self.wait_state(name, ACTIVE, ACTIVE_TIMEOUT_SECONDS)
+        self.svc("sleep", "--name", name)
+        return self.wait_state(name, ASLEEP, SLEEP_TIMEOUT_SECONDS)
+
+    def edge_addr(self, svc):
+        return f"{self.info['edge_ip']}:{svc['edge_port']}"
+
+    def measure(self, svc):
+        """One `wakeclient measure` from the client netns through the edge. Returns its line, with ok false if it broke."""
+        try:
+            p = self.exec("client", str(WAKECLIENT), "measure", "--addr", self.edge_addr(svc), timeout=MEASURE_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired as e:
+            return {"ok": False, "error": str(e)}
+        try:
+            return json.loads(p.stdout)
+        except ValueError:
+            return {"ok": False, "error": f"rc={p.returncode}: {p.stderr}"}
+
+    def wake_series(self, svc, count, before=None):
+        """`count` measures of a wake, each one of a service confirmed ASLEEP, with `before` right before each measure.
+        Returns the lines of wakeclient. If the service stops cooperating, the last line is the error and the series ends."""
+        lines = []
+        for _ in range(count):
+            try:
+                self.sleep_confirmed(svc["spec"]["name"])
+                if before is not None:
+                    before()
+            except CommandError as e:
+                lines.append({"ok": False, "error": str(e)})
+                break
+            lines.append(self.measure(svc))
+        return lines
 
     def cgroup(self, svc):
         """Directory of the cgroup of a service's instance, as the host sees it."""

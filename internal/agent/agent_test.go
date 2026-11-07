@@ -53,6 +53,17 @@ func parseConfig(t *testing.T, in configInput) *ociruntime.Spec {
 	return parsed
 }
 
+func TestBuildConfigMountsVolumes(t *testing.T) {
+	in := testInput()
+	in.volumes = "/s/volumes"
+	in.spec.Volumes = []*andenv1.Volume{{Name: "data", MountPath: "/var/data"}}
+	c := parseConfig(t, in)
+	last := c.Mounts[len(c.Mounts)-1]
+	if last.Destination != "/var/data" || last.Source != "/s/volumes/data" || last.Type != "bind" {
+		t.Errorf("mount %+v", last)
+	}
+}
+
 func TestBuildConfigLimitsAndNamespaces(t *testing.T) {
 	c := parseConfig(t, testInput())
 	r := c.Linux.Resources

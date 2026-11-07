@@ -34,6 +34,9 @@
 - Un servicio con `idle_seconds` mayor que 0 se duerme solo tras esa ventana sin conexiones ni tráfico saliente: sus procesos terminan, se liberan su red y su overlay, y devuelve su memoria. `SleepService` sigue el mismo camino y espera a que no queden conexiones vivas.
 - Una conexión a un servicio dormido lo despierta por la ruta `relaunch` y queda retenida hasta que responde, en cualquier puerto TCP. `WakeService` sigue el mismo camino.
 - Criterio de aceptación C7 (`acceptance/c07_sleep.py`).
+- Los volúmenes de `ServiceSpec` se montan: cada uno es un directorio del nodo que sobrevive a dormir y despertar. Un nombre de volumen con `/`, `.` o `..` se rechaza con `INVALID_ARGUMENT`.
+- `wakeclient`, cliente externo de medición: `measure`, `load` y `sample`. `apiclient` espera a que cada operación se asiente y reporta el código gRPC numérico.
+- Criterios de aceptación C1 (`acceptance/c01_api.py`), C8 (`c08_warm.py` y `c08_cold.py`), C9 (`c09_no_loss.py`) y C10 (`c10_tcp.py`).
 
 - Contrato del sistema, con decisiones cerradas de lenguaje, arquitectura, rutas de despertar, proxy, simulador, colocación y fencing.
 - Investigación con fuentes primarias y versiones de herramientas verificadas en la máquina de destino.

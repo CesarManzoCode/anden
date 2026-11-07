@@ -2,6 +2,7 @@ package agent
 
 import (
 	"errors"
+	"path/filepath"
 	"slices"
 	"strings"
 
@@ -39,6 +40,8 @@ type configInput struct {
 	utsNS  string
 	ipcNS  string
 	cgroup string
+	// volumes is the directory of the node that holds one directory per volume.
+	volumes string
 }
 
 // seccompEnabled says whether the instance runs with its filter: the restore
@@ -127,6 +130,15 @@ func buildConfig(in configInput) (*ociruntime.Spec, error) {
 			Syscalls:      []ociruntime.SeccompSyscall{{Names: blockedSyscalls, Action: "SCMP_ACT_ERRNO"}},
 		}
 	}
+	mounts := []ociruntime.Mount{
+		{Destination: "/proc", Type: "proc", Source: "proc", Options: []string{"nosuid", "noexec", "nodev"}},
+		{Destination: "/dev", Type: "tmpfs", Source: "tmpfs", Options: []string{"nosuid", "strictatime", "mode=755", "size=65536k"}},
+	}
+	for _, v := range in.spec.GetVolumes() {
+		mounts = append(mounts, ociruntime.Mount{
+			Destination: v.GetMountPath(), Type: "bind", Source: filepath.Join(in.volumes, v.GetName()), Options: []string{"bind"},
+		})
+	}
 	return &ociruntime.Spec{
 		Version: ociruntime.OCIVersion,
 		Process: &ociruntime.Process{
@@ -140,10 +152,7 @@ func buildConfig(in configInput) (*ociruntime.Spec, error) {
 		},
 		Root:     &ociruntime.Root{Path: in.rootfs},
 		Hostname: in.spec.GetName(),
-		Mounts: []ociruntime.Mount{
-			{Destination: "/proc", Type: "proc", Source: "proc", Options: []string{"nosuid", "noexec", "nodev"}},
-			{Destination: "/dev", Type: "tmpfs", Source: "tmpfs", Options: []string{"nosuid", "strictatime", "mode=755", "size=65536k"}},
-		},
-		Linux: linux,
+		Mounts:   mounts,
+		Linux:    linux,
 	}, nil
 }

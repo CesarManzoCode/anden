@@ -144,6 +144,17 @@ Fuentes primarias con su revisión fijada, consultadas el 6 nov 2026. Una págin
 
 Lo no medido aquí: la cifra de 2 ms de sondeo es el intervalo pedido por D04, no una latencia observada. Los códigos de estado distintos de `LISTEN` se tomaron de `include/net/tcp_states.h` sin observarlos uno por uno. Que la MAC fija evite una espera por caché ARP al despertar es hipótesis: se razonó por el funcionamiento de NUD, no se comparó contra una MAC nueva.
 
+## Cliente de medición y C8 a C10 (consultado el 6 nov 2026 para k2-05)
+
+| Herramienta o archivo | Qué se comprobó en esta máquina |
+|---|---|
+| `findmnt` (util-linux) | `findmnt -no FSTYPE --target RUTA` imprime `btrfs` para el repositorio; `--help` documenta `-n`, `-o` y `-T, --target` |
+| `/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor` | Se lee sin root e imprime `powersave` |
+| `sudo -n true` | Sale con 1 y «a password is required»: aquí C8 en caché fría sale con 77 |
+| `/proc/sys/vm/drop_caches` | No ejecutado, por falta de `sudo`. D18 fija escribir 3 |
+| `valkey-server` 9.1.2 | `--port P --bind 0.0.0.0 --protected-mode no --save ''` arranca: «Ready to accept connections tcp». `/etc/valkey/valkey.conf` trae `protected-mode yes` y `bind 127.0.0.1 -::1` |
+| `redis-cli` | `--help` documenta `-h`, `-p` y `--no-raw` («Force formatted output even when STDOUT is not a tty»), o sea que sin tty la salida es cruda |
+
 ## Documentación oficial sin revisión fija (consultada el 6 nov 2026)
 
 | Fuente | Dato |

@@ -78,8 +78,13 @@ func normalizeSpec(spec *andenv1.ServiceSpec) (*andenv1.ServiceSpec, error) {
 		}
 	}
 	for _, v := range s.Volumes {
-		if v.GetName() == "" || !path.IsAbs(v.GetMountPath()) || path.Clean(v.GetMountPath()) != v.GetMountPath() {
-			return nil, invalid("volumes need a name and a clean absolute mount_path")
+		// The name becomes a directory of the node.
+		name := v.GetName()
+		if name == "" || name == "." || name == ".." || strings.Contains(name, "/") {
+			return nil, invalid("a volume name cannot be empty, a relative path or contain /")
+		}
+		if !path.IsAbs(v.GetMountPath()) || path.Clean(v.GetMountPath()) != v.GetMountPath() {
+			return nil, invalid("volumes need a clean absolute mount_path")
 		}
 	}
 	// D03: the restore route has no volumes.

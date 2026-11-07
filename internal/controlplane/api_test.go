@@ -73,6 +73,12 @@ func TestNormalizeSpecRejects(t *testing.T) {
 		{"relative volume", func(s *andenv1.ServiceSpec) {
 			s.Volumes = []*andenv1.Volume{{Name: "data", MountPath: "data"}}
 		}, codes.InvalidArgument},
+		{"volume name out of its directory", func(s *andenv1.ServiceSpec) {
+			s.Volumes = []*andenv1.Volume{{Name: "../data", MountPath: "/data"}}
+		}, codes.InvalidArgument},
+		{"volume name is a parent", func(s *andenv1.ServiceSpec) {
+			s.Volumes = []*andenv1.Volume{{Name: "..", MountPath: "/data"}}
+		}, codes.InvalidArgument},
 		{"unknown route", func(s *andenv1.ServiceSpec) { s.WakeRoute = andenv1.WakeRoute(9) }, codes.InvalidArgument},
 		{"restore with volumes", func(s *andenv1.ServiceSpec) {
 			s.WakeRoute = andenv1.WakeRoute_WAKE_ROUTE_RESTORE
