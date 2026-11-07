@@ -11,7 +11,7 @@ Cada resultado se mide con un cliente externo y contra una comparación externa,
 | Fase | Contenido | Estado |
 |---|---|---|
 | K0 | Fundación: contrato, investigación y plan | Hecha |
-| K1 | Runtime OCI y almacén de imágenes | Pendiente |
+| K1 | Runtime OCI y almacén de imágenes | Cerrada |
 | K2 | Datacenter, API y despertar por relanzamiento | Pendiente |
 | K3 | Restauración, desglose por fases, descubrimiento y comparación | Pendiente |
 | K4 | Colocación, rollouts, caída y partición | Pendiente |
@@ -20,7 +20,17 @@ Cada resultado se mide con un cliente externo y contra una comparación externa,
 
 ## Resultados
 
-PENDIENTE: todavía no hay producto ni mediciones.
+Medido el 6 nov 2026 en esta máquina (kernel 7.2.14, Ryzen 5 5600G). Los límites de cada cifra están en [`LIMITATIONS.md`](LIMITATIONS.md).
+
+| Criterio | Comparación | Resultado medido |
+|---|---|---|
+| C3 | Subconjunto OCI de runtime-tools (`bd3b0bd`) | 20 de 20 pruebas pasan contra `anden-runtime`: 2220 aserciones `ok`, 0 `not ok` |
+| C6 | `probe` en Andén y en runc 1.5.2 | Informes idénticos: PID 1 propio, hostname propio, procesos del host invisibles, `mount` y `swapon` con `EPERM` |
+| C20 | Rootfs de umoci | Iguales en ruta, tipo, modo y hash en alpine (515 entradas), nginx (5014) y la imagen sintética (18) |
+| C21 | Digest de cada blob | 7 de 7 blobs coinciden. Con un byte cambiado en una capa, `verify` la nombra y `unpack` sale con 1 |
+| C22 | `du -sb` del almacén | nginx y nginx-perl comparten 7 capas, y cada capa se guarda una vez: 76 099 075 bytes, frente a 76 072 090 de capas únicas y 139 984 343 sin compartir |
+
+De K2 en adelante todavía no hay mediciones.
 
 ## Uso
 

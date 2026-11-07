@@ -57,9 +57,15 @@ Fuente única de lo que Andén no demuestra. Ningún otro archivo los repite.
 
 - Toda cifra vale para esta máquina (Ryzen 5 5600G, 14 GiB visibles, btrfs, gobernador `powersave`). No se compara con la de Railway como «más rápido»: la suya es de otra plataforma y de 2023.
 
+## Alcance de lo medido en K1
+
+- C3 mide la conformidad solo contra runtime-tools en el commit `bd3b0bd00f44e15f0f1ff4130c61dbea1b1c56cc`. Otra versión de la suite no está medida.
+- En la máquina, el efecto del filtro seccomp solo se ve en `mount` (C6) y en las 2 aserciones de `linux_seccomp` (C3). Las pruebas de Go del generador interpretan el BPF con un intérprete propio, no con el kernel.
+- C6 compara contra `/usr/bin/runc` 1.5.2 y no contra crun.
+- C20 compara solo alpine, nginx y la imagen sintética. Que el rootfs sea igual al de umoci no está medido en ninguna otra imagen.
+- C21 solo mide un byte cambiado en una capa ya importada, y el rechazo al usarlo solo se observa en `anden image unpack`. No se midieron un blob truncado o faltante, ni un rechazo en `mount`.
+- C22 mide la deduplicación con `du -sb` sobre `blobs/` y con un solo par de imágenes, nginx y nginx-perl, que comparten 7 capas. No mide con `du` las capas extraídas en `layers/<diffid>/`.
+
 ## Sin demostrar todavía
 
-Todo el producto. Esta sección se reduce conforme cada K cierre.
-
-- `anden-runtime` está escrito (k1-02) y su generador de BPF para seccomp también (k1-03), pero no se han ejecutado en esta máquina: ni su conformidad OCI ni su aislamiento están medidos hasta que corran C3 y C6. Las pruebas de Go del generador interpretan el programa con un intérprete propio, no con el kernel.
-- El almacén de imágenes y `anden image` están escritos (k1-04), pero no se han compilado ni ejecutado: la igualdad con umoci, la integridad y la deduplicación no están medidas hasta que corran C20, C21 y C22. Lo único medido es el comportamiento de `umoci --rootless` que está en `vault/RESEARCH.md`.
+Todo lo que sigue a K1: datacenter, API, despertar, descubrimiento, colocación, rollouts, observabilidad y densidad. Esta sección se reduce conforme cada K cierre.

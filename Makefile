@@ -11,7 +11,7 @@ GEN_OUT ?= gen
 
 check:
 	@if [ ! -f go.mod ]; then echo "check: no product yet, nothing to verify"; exit 0; fi; \
-	unformatted="$$(gofmt -l .)"; \
+	unformatted="$$(find . -path ./.cache -prune -o -name "*.go" -print | xargs -r gofmt -l)"; \
 	if [ -n "$$unformatted" ]; then echo "gofmt needed:"; echo "$$unformatted"; exit 1; fi; \
 	$(GO) vet ./... && $(GO) test ./... || exit 1; \
 	if [ -d verify ] && $(GO) list -f '{{.ImportPath}}: {{join .Imports " "}}' ./verify/... | grep -q '/anden/internal/'; then \
