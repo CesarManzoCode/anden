@@ -7,6 +7,13 @@
 - El plano de control coloca con el scheduler de D07: filtra los nodos listos por CPU, memoria y grupo de anti-afinidad (`anti_affinity_group`), y elige por best-fit del recurso dominante, del servicio más grande al más pequeño. Dos servicios del mismo grupo no comparten nodo.
 - `anden placement solve --input FILE [--json]` corre el scheduler sobre una instancia en JSON, sin datacenter, y da el nodo de cada servicio o `null` si no cabe.
 - Criterio de aceptación C15 (`acceptance/c15_placement.py`), con la fuerza bruta `verify/cmd/placeopt` como comparación.
+- `DeployService` sobre un servicio `ACTIVE` hace rollout (D24): arranca la versión nueva junto a la vieja, con su propia dirección; cuando pasa el healthcheck del agente (HTTP o TCP) cambia el borde y el DNS en un solo paso, espera `overlap_seconds`, y el agente le envía SIGTERM a la vieja y, `draining_seconds` después, SIGKILL. Si el healthcheck no pasa en `healthcheck_timeout_seconds`, destruye la nueva sin tocar el borde y la vieja sigue activa. El despliegue vive en Postgres y sigue tras reiniciar `andend`. Sobre un servicio dormido solo cambia la versión deseada, que se aplica al despertar.
+- `echosvc` responde 503 en `/healthz` si tiene `FAIL_HEALTH`.
+- Criterios de aceptación C16 (`acceptance/c16_rollout.py`) y C17 (`acceptance/c17_rollback.py`), con carga de vegeta a 200 peticiones por segundo durante 30 s.
+
+### Cambiado
+
+- `DeployService` ya no para la instancia vieja antes de arrancar la nueva, salvo en un singleton. Mientras haya un despliegue en curso, otro sobre el mismo servicio responde `FAILED_PRECONDITION`.
 
 ## K3: restauración, desglose por fases, descubrimiento y comparación (2026-11-07)
 

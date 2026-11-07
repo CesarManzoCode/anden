@@ -40,6 +40,11 @@ type State interface {
 	SetPlacement(ctx context.Context, name string, revision int64, node, addr string) (bool, error)
 	SetObserved(ctx context.Context, name string, revision int64, obs store.Observed) (bool, error)
 	Purge(ctx context.Context, name string, revision int64) error
+	Deployments(ctx context.Context) ([]store.Deployment, error)
+	SetDeployAddr(ctx context.Context, service string, generation int64, addr string) (bool, error)
+	SwitchDeploy(ctx context.Context, service string, generation int64, from, phase string, now time.Time) (bool, error)
+	SetDeployPhase(ctx context.Context, service string, generation int64, from, to string, now time.Time) (bool, error)
+	EndDeploy(ctx context.Context, service string, generation int64) error
 }
 
 // Reconciler is level based: each pass reads the whole desired and reported
@@ -56,10 +61,13 @@ type Reconciler struct {
 	edge *Edge
 	// records are the names the DNS answers (D22); nil without a DNS.
 	records *dns.Records
+	// now is the wall clock: the phases of a deployment are timed against
+	// instants stored in Postgres, which outlive this process.
+	now func() time.Time
 }
 
 func NewReconciler(state State) *Reconciler {
-	return &Reconciler{state: state, kick: make(chan struct{}, 1), ready: func(string) bool { return true }}
+	return &Reconciler{state: state, kick: make(chan struct{}, 1), ready: func(string) bool { return true }, now: time.Now}
 }
 
 // Kick asks for a pass without waiting for the next tick.
@@ -97,7 +105,25 @@ func (r *Reconciler) Pass(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if err := r.place(ctx, services); err != nil {
+	deploys, err := r.state.Deployments(ctx)
+	if err != nil {
+		return err
+	}
+	changed, err := r.rollout(ctx, services, instances, deploys)
+	if err != nil {
+		return err
+	}
+	// A switch changed the address of a service: the edge and the DNS of
+	// this same pass must follow it.
+	if changed {
+		if services, err = r.state.ListServices(ctx, true); err != nil {
+			return err
+		}
+		if deploys, err = r.state.Deployments(ctx); err != nil {
+			return err
+		}
+	}
+	if err := r.place(ctx, services, deploys); err != nil {
 		return err
 	}
 	if r.records != nil {
@@ -143,8 +169,10 @@ func specOf(svc store.Service) (*andenv1.ServiceSpec, error) {
 // services. The services without a node are placed together as one batch by
 // the scheduler of D07, over the ready nodes and on top of what the awake
 // services with a node already reserve. A service that fits nowhere waits for
-// a later pass; lost revision races too.
-func (r *Reconciler) place(ctx context.Context, services []store.Service) error {
+// a later pass; lost revision races too. The new instance of a deployment gets
+// an address of its node the same way, and the addresses of both instances of
+// a deployment stay taken until it ends.
+func (r *Reconciler) place(ctx context.Context, services []store.Service, deploys []store.Deployment) error {
 	nodes, err := r.state.ListNodes(ctx)
 	if err != nil {
 		return err
@@ -158,6 +186,10 @@ func (r *Reconciler) place(ctx context.Context, services []store.Service) error 
 		}
 	}
 	used := map[string]bool{}
+	for _, d := range deploys {
+		used[d.Addr], used[d.OldAddr] = true, true
+	}
+	delete(used, "")
 	for _, svc := range services {
 		if svc.DesiredAddr != "" {
 			used[svc.DesiredAddr] = true
@@ -208,6 +240,23 @@ func (r *Reconciler) place(ctx context.Context, services []store.Service) error 
 		svc.DesiredNode, svc.DesiredAddr = node, addr
 		used[addr] = true
 	}
+	for _, d := range deploys {
+		subnet, known := subnets[d.Node]
+		if d.Phase != phaseStarting || d.Addr != "" || !known {
+			continue
+		}
+		addr, err := nextAddr(subnet, used)
+		if err != nil {
+			return err
+		}
+		ok, err := r.state.SetDeployAddr(ctx, d.Service, d.Generation, addr)
+		if err != nil {
+			return err
+		}
+		if ok {
+			used[addr] = true
+		}
+	}
 	return nil
 }
 
@@ -249,6 +298,8 @@ func InstanceID(service string, generation int64) string {
 }
 
 // toAssignments is what a node's agent receives for the services placed on it.
+// draining_seconds goes only to the old instance of a deploy (deployAssignments):
+// any other instance that stops gets the agent's usual grace.
 func toAssignments(services []store.Service) ([]*andenv1.Assignment, error) {
 	out := make([]*andenv1.Assignment, 0, len(services))
 	for _, svc := range services {
@@ -256,6 +307,7 @@ func toAssignments(services []store.Service) ([]*andenv1.Assignment, error) {
 		if err != nil {
 			return nil, err
 		}
+		spec.DrainingSeconds = nil
 		out = append(out, &andenv1.Assignment{
 			InstanceId: InstanceID(svc.Name, svc.Generation),
 			Spec:       spec,

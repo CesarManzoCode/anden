@@ -4,7 +4,8 @@
 // PORT is the TCP port (8080 by default) and VERSION the reported version. If
 // LOG_PATH is set, each request with an X-Request-Id header appends a JSON line
 // {"id": ...} to that file before the response is written, so an answered
-// request is always in the log.
+// request is always in the log. If FAIL_HEALTH is set, /healthz answers 503:
+// it is the version whose healthcheck never passes, for the rollback criterion.
 //
 // Three paths misbehave on request, for the limit criteria, and answer at once:
 // /hog?mib=N allocates and touches N MiB, /fork starts a process that forks
@@ -71,7 +72,7 @@ func main() {
 		defer file.Close()
 		requests = file
 	}
-	log.Fatal(http.ListenAndServe(":"+port, newHandler(os.Getenv("VERSION"), requests)))
+	log.Fatal(http.ListenAndServe(":"+port, newHandler(os.Getenv("VERSION"), os.Getenv("FAIL_HEALTH") != "", requests)))
 }
 
 // bomb forks processes that stay alive for as long as it can, and keeps trying
@@ -113,11 +114,16 @@ func burn(seconds, workers int) {
 	}
 }
 
-func newHandler(version string, requests io.Writer) http.Handler {
+func newHandler(version string, failHealth bool, requests io.Writer) http.Handler {
 	var count atomic.Uint64
 	padding := strings.Repeat("x", 256)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
+		case "/healthz":
+			if failHealth {
+				http.Error(w, "unhealthy", http.StatusServiceUnavailable)
+				return
+			}
 		case "/hog":
 			// Answers first: the kernel kills the process while it allocates.
 			w.WriteHeader(http.StatusAccepted)

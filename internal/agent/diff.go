@@ -8,15 +8,21 @@ import (
 // local is what diff needs to know about an instance the agent has.
 type local struct {
 	service  string
+	addr     string
 	stopping bool
 }
+
+// slot is a service at an address: two instances of one slot cannot coexist.
+// The two instances of a deploy have one address each, so the new one starts
+// beside the old one (D24).
+func slot(service, addr string) string { return service + " " + addr }
 
 // diff compares what the control plane asks for with what the node has and
 // returns what to start and which instances must not stay as they are. An
 // instance that is not asked for, or whose service must sleep, is among those
 // (sleepAction tells them apart); a failed one stays, for inspection, until its
-// generation changes. A new instance of a service waits until the previous one
-// is gone, because both would use the same address.
+// generation changes. A new instance of a service at the same address waits
+// until the previous one is gone.
 func diff(desired []*andenv1.Assignment, have map[string]local) (start []*andenv1.Assignment, stop []string) {
 	awake := make(map[string]bool, len(desired))
 	for _, as := range desired {
@@ -26,13 +32,13 @@ func diff(desired []*andenv1.Assignment, have map[string]local) (start []*andenv
 	}
 	busy := make(map[string]bool, len(have))
 	for id, in := range have {
-		busy[in.service] = true
+		busy[slot(in.service, in.addr)] = true
 		if !awake[id] && !in.stopping {
 			stop = append(stop, id)
 		}
 	}
 	for _, as := range desired {
-		if _, ok := have[as.GetInstanceId()]; as.GetAwake() && !ok && !busy[as.GetSpec().GetName()] {
+		if _, ok := have[as.GetInstanceId()]; as.GetAwake() && !ok && !busy[slot(as.GetSpec().GetName(), as.GetAddr())] {
 			start = append(start, as)
 		}
 	}
@@ -45,11 +51,11 @@ func diff(desired []*andenv1.Assignment, have map[string]local) (start []*andenv
 func dormant(desired []*andenv1.Assignment, have map[string]local) []*andenv1.Assignment {
 	busy := make(map[string]bool, len(have))
 	for _, in := range have {
-		busy[in.service] = true
+		busy[slot(in.service, in.addr)] = true
 	}
 	var out []*andenv1.Assignment
 	for _, as := range desired {
-		if !as.GetAwake() && !busy[as.GetSpec().GetName()] {
+		if !as.GetAwake() && !busy[slot(as.GetSpec().GetName(), as.GetAddr())] {
 			out = append(out, as)
 		}
 	}

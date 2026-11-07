@@ -27,3 +27,9 @@ func TestSchemaIsEmbedded(t *testing.T) {
 		}
 	}
 }
+
+func TestMigrationsAreInOrder(t *testing.T) {
+	if len(migrations) != 2 || migrations[0] != schemaV1 || !strings.Contains(migrations[1], "CREATE TABLE deployments (") {
+		t.Fatalf("migrations are not v1 then v2 with deployments")
+	}
+}

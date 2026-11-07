@@ -370,11 +370,14 @@ func (a *Agent) reconcile(ctx context.Context) {
 	desired := a.effective()
 	have := make(map[string]local, len(a.instances))
 	for id, in := range a.instances {
-		have[id] = local{service: in.service, stopping: in.stopping}
+		have[id] = local{service: in.service, addr: in.addr, stopping: in.stopping}
 	}
 	awake := make(map[string]bool, len(desired))
 	for _, as := range desired {
 		awake[as.GetInstanceId()] = as.GetAwake()
+		if in := a.instances[as.GetInstanceId()]; in != nil {
+			follow(in, as.GetSpec(), time.Now())
+		}
 		// Only from Asleep: a sleep under way that has not told anyone yet
 		// must not read as a wake.
 		if in := a.instances[as.GetInstanceId()]; in != nil && as.GetAwake() && !in.stopping && in.machine.State() == wake.Asleep {

@@ -82,6 +82,9 @@ type instance struct {
 
 	state    andenv1.InstanceState
 	stopping bool
+	// drain is the time between SIGTERM and SIGKILL when the instance stops:
+	// the draining_seconds of a deploy that replaces it, or 0 for stopGrace.
+	drain time.Duration
 	// idle is nil when the service never sleeps on its own (D05).
 	idle       *wake.Idle
 	nextSample time.Time
@@ -156,6 +159,24 @@ func (a *Agent) start(in *instance, as *andenv1.Assignment) {
 	a.setState(in, andenv1.InstanceState_INSTANCE_STATE_FAILED)
 }
 
+// follow takes from the latest assignment of an instance what can change while
+// it lives: the grace of its stop and whether it sleeps on its own. A deploy
+// gives the old instance its draining_seconds and no idle window until it is
+// no longer assigned (D24); a deploy that fails gives back the usual ones.
+// a.mu must be held.
+func follow(in *instance, spec *andenv1.ServiceSpec, now time.Time) {
+	in.drain = time.Duration(spec.GetDrainingSeconds()) * time.Second
+	if spec.IdleSeconds == nil {
+		return
+	}
+	switch seconds := spec.GetIdleSeconds(); {
+	case seconds == 0:
+		in.idle = nil
+	case in.idle == nil:
+		in.idle = wake.NewIdle(time.Duration(seconds)*time.Second, now)
+	}
+}
+
 // running marks an instance as up. Its idle window starts now.
 func (a *Agent) running(in *instance) {
 	a.setState(in, andenv1.InstanceState_INSTANCE_STATE_RUNNING)
@@ -194,7 +215,7 @@ func (c *instanceControl) Halt() error {
 	in := c.in
 	c.a.declare(in, false)
 	in.hasSnapshot = in.routeRequested == routeRestore && c.a.sleepByDump(in)
-	c.a.terminate(in)
+	c.a.terminate(in, stopGrace)
 	in.pid = 0
 	if in.hasSnapshot {
 		unmount(in, in.paths.merged)
@@ -622,7 +643,13 @@ func (a *Agent) stop(in *instance) {
 	in.cancel()
 	<-in.started
 	in.machine.Close()
-	a.terminate(in)
+	a.mu.Lock()
+	grace := in.drain
+	a.mu.Unlock()
+	if grace == 0 {
+		grace = stopGrace
+	}
+	a.terminate(in, grace)
 	a.teardown(in)
 	a.proxy.Unregister(in.machine)
 	a.mu.Lock()
@@ -632,9 +659,10 @@ func (a *Agent) stop(in *instance) {
 	a.changes++
 }
 
-// terminate ends the processes of an instance with SIGTERM and, after the grace
-// period, cgroup.kill, and has the runtime forget the container.
-func (a *Agent) terminate(in *instance) {
+// terminate ends the processes of an instance with SIGTERM and, after grace,
+// cgroup.kill, which is SIGKILL for all of them, and has the runtime forget the
+// container.
+func (a *Agent) terminate(in *instance, grace time.Duration) {
 	p := in.paths
 	if populated, _ := cgroupPopulated(p.cgroup); populated {
 		if in.pid > 0 {
@@ -645,7 +673,7 @@ func (a *Agent) terminate(in *instance) {
 			// It fails when create never finished; cgroup.kill covers that.
 			_ = exec.Command(a.cfg.Runtime, a.runtimeArgs("kill", in.id, "TERM")...).Run()
 		}
-		if !waitEmpty(p.cgroup, stopGrace) {
+		if !waitEmpty(p.cgroup, grace) {
 			if err := killCgroup(p.cgroup); err != nil && !errors.Is(err, os.ErrNotExist) {
 				log.Printf("instance %s: %v", in.id, err)
 			}

@@ -327,3 +327,41 @@ class Datacenter:
 
     def load(self, svc, seconds):
         return Load(self, svc["spec"]["name"], svc["edge_port"], seconds)
+
+
+class Vegeta:
+    """`vegeta attack -rate=200/s -duration=30s -keepalive=false` from the client netns through the edge (D11), in the background.
+    report() waits for it and keeps what `vegeta report -type=json` says of its results."""
+
+    RATE = "200/s"
+    DURATION_SECONDS = 30
+
+    def __init__(self, dc, svc, raw_dir, headers=()):
+        raw_dir = Path(raw_dir)
+        targets = raw_dir / "targets.txt"
+        targets.write_text(f"GET http://{dc.edge_addr(svc)}/\n")
+        self.results = raw_dir / "vegeta.bin"
+        self.proc = subprocess.Popen(
+            dc.exec_cmd("client", "vegeta", "attack", f"-rate={self.RATE}", f"-duration={self.DURATION_SECONDS}s",
+                        "-keepalive=false", f"-targets={targets}", f"-output={self.results}",
+                        *[f"-header={h}" for h in headers]),
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+        self.started = time.monotonic()
+
+    def report(self, out_path, timeout=120):
+        _, err = self.proc.communicate(timeout=timeout)
+        if self.proc.returncode != 0:
+            raise CommandError(f"vegeta attack: rc={self.proc.returncode}: {err}")
+        p = subprocess.run(["vegeta", "report", "-type=json", str(self.results)], capture_output=True, text=True,
+                           stdin=subprocess.DEVNULL, check=True)
+        Path(out_path).write_text(p.stdout)
+        return json.loads(p.stdout)
+
+
+def sample_versions(dc, svc, count):
+    """`count` runs of `wakeclient sample` from the client netns through the edge: the version that answered, or `error: ...`."""
+    lines = []
+    for _ in range(count):
+        p = dc.exec("client", str(WAKECLIENT), "sample", "--addr", dc.edge_addr(svc), "--timeout", "5s")
+        lines.append(p.stdout.strip() if p.returncode == 0 else f"error: {p.stderr.strip()}")
+    return lines

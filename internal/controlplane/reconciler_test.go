@@ -23,6 +23,8 @@ type memState struct {
 	services  map[string]store.Service
 	instances []store.Instance
 	nodes     []store.Node
+	// deploys are the deployments by service, with the rules of the store.
+	deploys map[string]store.Deployment
 }
 
 func (m *memState) ListServices(_ context.Context, includeDeleted bool) ([]store.Service, error) {

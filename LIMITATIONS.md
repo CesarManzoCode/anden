@@ -59,7 +59,15 @@ Fuente única de lo que Andén no demuestra. Ningún otro archivo los repite.
 - El scheduler solo coloca lo que no tiene nodo. Un despertar sigue en su nodo hogar aunque ya no quepa: todavía no se elige otro nodo ni se mueve la dirección (D07).
 - `placeopt` recorre (k+1)^n asignaciones, no las 3^n que dice D07: maximizar los servicios colocados exige considerar dejar uno fuera. Solo acepta hasta 12 servicios.
 - Un nodo caído no recoloca sus servicios, y el agente no se autofencia todavía: sin plano de control sigue con lo que tiene.
-- `DeployService` para la instancia vieja y luego arranca la nueva, con tiempo sin servicio: todavía no sigue D24.
+- En un despliegue, la instancia nueva va al mismo nodo que la vieja y el scheduler no le reserva CPU ni memoria: durante el despliegue el nodo puede quedar sobrecomprometido.
+- Un singleton no hace rollout: `DeployService` para la instancia vieja y luego arranca la nueva, con tiempo sin servicio, para no tener nunca dos instancias activas.
+- Un despliegue solo hace rollout si el servicio está `ACTIVE`. En cualquier otro estado (dormido, `CREATING`, `WAKING`, `FAILED`) solo cambia la versión deseada, como pide D24 para un servicio dormido.
+- Un servicio admite un solo despliegue en curso: otro `DeployService` antes de que termine el draining responde `FAILED_PRECONDITION`.
+- El plazo de `healthcheck_timeout_seconds` del plano de control cuenta desde `DeployService`, e incluye traer la imagen al nodo; el del agente cuenta desde que arrancó el proceso. Gana el primero que venza.
+- Las fases del despliegue se miden con el reloj de pared de `andend` contra instantes guardados en Postgres. Un salto del reloj adelanta o atrasa el overlap y el draining.
+- El draining termina a más tardar 10 s después de `draining_seconds` aunque la instancia vieja siga reportada, porque un nodo caído no vuelve a reportar.
+- El SIGTERM le llega a la instancia vieja hasta un latido (500 ms) después del fin del overlap, y el draining se cuenta en el agente desde ese momento.
+- Mientras dura un despliegue la instancia vieja no se duerme por inactividad. Si ya estaba dormida cuando la nueva pasó salud, no hay overlap: se drena de inmediato.
 - `MoveService` deja el servicio dormido en su nuevo hogar. Una instancia despierta no pasa por el volcado: se para, así que un servicio `restore` pierde su memoria al moverse y despierta en el nodo nuevo por `relaunch`.
 - Entre `MoveService` y la siguiente pasada del reconciliador (hasta 200 ms) el servicio no tiene dirección: el DNS responde NXDOMAIN y el borde no tiene su puerto. La dirección vieja queda libre en ese momento, aunque la instancia del nodo anterior todavía se esté parando.
 - El DNS (`10.80.0.1:53`) solo conoce `<servicio>.anden.internal`: no reenvía a otro servidor ni hace recursión, responde NXDOMAIN a cualquier otro nombre y no tiene registros AAAA ni SRV. No tiene autenticación ni límite de consultas.

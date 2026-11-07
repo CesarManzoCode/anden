@@ -6,6 +6,7 @@ import (
 	"path"
 	"regexp"
 	"strings"
+	"time"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -118,7 +119,7 @@ func grpcError(err error) error {
 		return status.Error(codes.NotFound, err.Error())
 	case errors.Is(err, store.ErrExists):
 		return status.Error(codes.AlreadyExists, err.Error())
-	case errors.Is(err, store.ErrStaleEpoch):
+	case errors.Is(err, store.ErrStaleEpoch), errors.Is(err, store.ErrDeployInProgress):
 		return status.Error(codes.FailedPrecondition, err.Error())
 	case errors.Is(err, store.ErrNoEdgePort):
 		return status.Error(codes.ResourceExhausted, err.Error())
@@ -263,8 +264,11 @@ func (a *andenService) DeleteService(ctx context.Context, req *andenv1.DeleteSer
 	return a.reply(ctx, svc, err)
 }
 
-// DeployService stores a new spec as the next version, in a new generation. On
-// a sleeping service it only changes the desired version (D24).
+// DeployService rolls out a new spec as the next version, in a new generation
+// (D24). On an active service the version only becomes the desired one once
+// the new instance passes its healthcheck, and the reconciler carries the
+// rollout from there; on any other, a sleeping one above all, it only changes
+// the desired version, which applies at the next wake.
 func (a *andenService) DeployService(ctx context.Context, req *andenv1.DeployServiceRequest) (*andenv1.Service, error) {
 	spec, err := normalizeSpec(req.GetSpec())
 	if err != nil {
@@ -274,12 +278,7 @@ func (a *andenService) DeployService(ctx context.Context, req *andenv1.DeploySer
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
-	svc, err := a.cp.store.UpdateDesired(ctx, spec.Name, func(s *store.Service) error {
-		s.Spec = raw
-		s.Version++
-		s.Generation++
-		return nil
-	})
+	svc, _, err := a.cp.store.Deploy(ctx, spec.Name, raw, phaseStarting, time.Now(), rolloutWanted)
 	return a.reply(ctx, svc, err)
 }
 

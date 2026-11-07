@@ -88,12 +88,15 @@ func (a *agentService) Heartbeat(ctx context.Context, req *andenv1.HeartbeatRequ
 		return nil, status.Errorf(codes.FailedPrecondition, "epoch %d of %s is stale, current is %d", req.GetEpoch(), req.GetNode(), epoch)
 	}
 	a.cp.live.touch(req.GetNode())
-	services, err := a.cp.store.Assignments(ctx, req.GetNode())
+	services, deploys, err := a.cp.store.NodeAssignments(ctx, req.GetNode())
 	if err != nil {
 		return nil, grpcError(err)
 	}
 	assignments, err := toAssignments(services)
 	if err != nil {
+		return nil, grpcError(err)
+	}
+	if assignments, err = deployAssignments(req.GetNode(), assignments, deploys); err != nil {
 		return nil, grpcError(err)
 	}
 	return &andenv1.HeartbeatResponse{LeaseTtlMs: uint32(leaseTTL / time.Millisecond), Assignments: assignments}, nil

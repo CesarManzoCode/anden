@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"google.golang.org/protobuf/proto"
 
@@ -212,6 +213,11 @@ func assignment(service string, generation uint64, awake bool) *andenv1.Assignme
 	}
 }
 
+func atAddr(as *andenv1.Assignment, addr string) *andenv1.Assignment {
+	as.Addr = addr
+	return as
+}
+
 func TestDiff(t *testing.T) {
 	cases := []struct {
 		name      string
@@ -233,6 +239,8 @@ func TestDiff(t *testing.T) {
 			map[string]local{"a-1": {service: "a", stopping: true}}, nil, nil},
 		{"other services do not interfere", []*andenv1.Assignment{assignment("a", 1, true), assignment("b", 1, true)},
 			map[string]local{"a-1": {service: "a"}}, []string{"b-1"}, nil},
+		{"a deploy starts the new instance beside the old one", []*andenv1.Assignment{assignment("a", 1, true), atAddr(assignment("a", 2, true), "10.81.0.3")},
+			map[string]local{"a-1": {service: "a"}}, []string{"a-2"}, nil},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -476,5 +484,18 @@ func TestObserveWritesTransitionsPerService(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(a.cfg.State, transitionsFile+".tmp")); !os.IsNotExist(err) {
 		t.Fatalf("the temporary file stayed: %v", err)
+	}
+}
+
+func TestFollowTakesDrainAndIdleOfTheAssignment(t *testing.T) {
+	now := time.Now()
+	in := &instance{idle: wake.NewIdle(time.Minute, now)}
+	follow(in, &andenv1.ServiceSpec{DrainingSeconds: proto.Uint32(2), IdleSeconds: proto.Uint32(0)}, now)
+	if in.drain != 2*time.Second || in.idle != nil {
+		t.Fatalf("old instance of a deploy: drain %v idle %v", in.drain, in.idle)
+	}
+	follow(in, &andenv1.ServiceSpec{IdleSeconds: proto.Uint32(60)}, now)
+	if in.drain != 0 || in.idle == nil {
+		t.Fatalf("after a failed deploy: drain %v idle %v", in.drain, in.idle)
 	}
 }

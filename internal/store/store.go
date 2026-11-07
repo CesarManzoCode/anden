@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -17,6 +18,12 @@ import (
 
 //go:embed schema.sql
 var schemaV1 string
+
+//go:embed schema_v2.sql
+var schemaV2 string
+
+// migrations are the schema versions in order: migrations[i] is version i+1.
+var migrations = []string{schemaV1, schemaV2}
 
 // migrationLock is the advisory lock key held while migrating, so two
 // control planes starting together do not apply the schema twice.
@@ -33,6 +40,9 @@ var (
 	ErrExists     = errors.New("already exists")
 	ErrStaleEpoch = errors.New("stale node epoch")
 	ErrNoEdgePort = errors.New("no free edge port")
+	// ErrDeployInProgress refuses a deploy while another one of the service
+	// has not ended.
+	ErrDeployInProgress = errors.New("a deploy of the service is in progress")
 )
 
 // Service is one row of desired plus observed state. Spec is opaque to the
@@ -131,16 +141,17 @@ func migrate(ctx context.Context, pool *pgxpool.Pool) error {
 		if err := tx.QueryRow(ctx, "SELECT coalesce(max(version), 0) FROM schema_migrations").Scan(&version); err != nil {
 			return err
 		}
-		if version >= 1 {
-			return nil
+		for ; version < len(migrations); version++ {
+			// Without arguments pgx uses the simple protocol, which accepts
+			// several statements in one call.
+			if _, err := tx.Exec(ctx, migrations[version]); err != nil {
+				return err
+			}
+			if _, err := tx.Exec(ctx, "INSERT INTO schema_migrations (version) VALUES ($1)", version+1); err != nil {
+				return err
+			}
 		}
-		// Without arguments pgx uses the simple protocol, which accepts
-		// several statements in one call.
-		if _, err := tx.Exec(ctx, schemaV1); err != nil {
-			return err
-		}
-		_, err := tx.Exec(ctx, "INSERT INTO schema_migrations (version) VALUES (1)")
-		return err
+		return nil
 	})
 }
 
@@ -238,15 +249,6 @@ func (s *Store) SetPlacement(ctx context.Context, name string, revision int64, n
 	return tag.RowsAffected() == 1, err
 }
 
-// Assignments returns the live services placed on node, ordered by name.
-func (s *Store) Assignments(ctx context.Context, node string) ([]Service, error) {
-	rows, err := s.pool.Query(ctx, "SELECT "+serviceColumns+" FROM services WHERE desired_node = $1 AND desired_addr <> '' AND NOT deleted ORDER BY name", node)
-	if err != nil {
-		return nil, err
-	}
-	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (Service, error) { return scanService(row) })
-}
-
 // Purge removes a service marked as deleted, if still at revision.
 func (s *Store) Purge(ctx context.Context, name string, revision int64) error {
 	_, err := s.pool.Exec(ctx, "DELETE FROM services WHERE name = $1 AND revision = $2 AND deleted", name, revision)
@@ -325,4 +327,162 @@ func (s *Store) NodeEpoch(ctx context.Context, name string) (int64, error) {
 		return 0, ErrNotFound
 	}
 	return epoch, err
+}
+
+// Deployment is a rollout under way (D24). Spec, Version, Generation, Node and
+// Addr are those of the new instance, Addr empty until the reconciler gives
+// one; the Old fields are those of the instance it replaces. Since is when
+// Phase began.
+type Deployment struct {
+	Service       string
+	Phase         string
+	Spec          []byte
+	Version       int64
+	Generation    int64
+	Node          string
+	Addr          string
+	OldSpec       []byte
+	OldVersion    int64
+	OldGeneration int64
+	OldNode       string
+	OldAddr       string
+	Since         time.Time
+}
+
+const deploymentColumns = "service, phase, spec, version, generation, node, addr, old_spec, old_version, old_generation, old_node, old_addr, since"
+
+func scanDeployment(row pgx.Row) (Deployment, error) {
+	var d Deployment
+	err := row.Scan(&d.Service, &d.Phase, &d.Spec, &d.Version, &d.Generation, &d.Node, &d.Addr,
+		&d.OldSpec, &d.OldVersion, &d.OldGeneration, &d.OldNode, &d.OldAddr, &d.Since)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return d, ErrNotFound
+	}
+	return d, err
+}
+
+// Deploy stores spec as the next version of a live service, in a new
+// generation. If rollout says so for the current row, the row stays as it is
+// and a deployment in phase, on the node of the service, is recorded instead
+// for the reconciler to carry on; otherwise spec replaces the current one at
+// once. It reports whether a deployment began, and refuses a deploy while
+// another one of the service has not ended.
+func (s *Store) Deploy(ctx context.Context, name string, spec []byte, phase string, now time.Time, rollout func(Service) bool) (Service, bool, error) {
+	var out Service
+	started := false
+	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+		cur, err := scanService(tx.QueryRow(ctx, "SELECT "+serviceColumns+" FROM services WHERE name = $1 AND NOT deleted FOR UPDATE", name))
+		if err != nil {
+			return err
+		}
+		var busy bool
+		if err := tx.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM deployments WHERE service = $1)", name).Scan(&busy); err != nil {
+			return err
+		}
+		if busy {
+			return ErrDeployInProgress
+		}
+		if !rollout(cur) {
+			out, err = scanService(tx.QueryRow(ctx, `UPDATE services SET spec = $2, version = version + 1,
+				generation = generation + 1, revision = revision + 1 WHERE name = $1 RETURNING `+serviceColumns, name, spec))
+			return err
+		}
+		_, err = tx.Exec(ctx, `INSERT INTO deployments (`+deploymentColumns+`)
+			VALUES ($1, $2, $3, $4, $5, $6, '', $7, $8, $9, $10, $11, $12)`,
+			name, phase, spec, cur.Version+1, cur.Generation+1, cur.DesiredNode,
+			cur.Spec, cur.Version, cur.Generation, cur.DesiredNode, cur.DesiredAddr, now)
+		out, started = cur, true
+		return err
+	})
+	return out, started, err
+}
+
+// Deployments returns the deployments under way, ordered by service.
+func (s *Store) Deployments(ctx context.Context) ([]Deployment, error) {
+	rows, err := s.pool.Query(ctx, "SELECT "+deploymentColumns+" FROM deployments ORDER BY service")
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (Deployment, error) { return scanDeployment(row) })
+}
+
+// SetDeployAddr gives the new instance of a deployment its address, if it has
+// none yet. It reports whether the row was written.
+func (s *Store) SetDeployAddr(ctx context.Context, service string, generation int64, addr string) (bool, error) {
+	tag, err := s.pool.Exec(ctx, "UPDATE deployments SET addr = $3 WHERE service = $1 AND generation = $2 AND addr = ''",
+		service, generation, addr)
+	return tag.RowsAffected() == 1, err
+}
+
+// SwitchDeploy makes the new instance of a deployment the desired one of its
+// service, awake, with its node and address, and moves the deployment to
+// phase, all in one transaction: the edge and the DNS follow the address of
+// the service. It does nothing, and reports false, if the deployment is not in
+// from or the service has left the generation the deployment replaces.
+func (s *Store) SwitchDeploy(ctx context.Context, service string, generation int64, from, phase string, now time.Time) (bool, error) {
+	switched := false
+	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+		d, err := scanDeployment(tx.QueryRow(ctx, "SELECT "+deploymentColumns+" FROM deployments WHERE service = $1 FOR UPDATE", service))
+		if errors.Is(err, ErrNotFound) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if d.Generation != generation || d.Phase != from || d.Addr == "" {
+			return nil
+		}
+		tag, err := tx.Exec(ctx, `UPDATE services SET spec = $2, version = $3, generation = $4, desired_node = $5,
+			desired_addr = $6, desired_awake = true, revision = revision + 1
+			WHERE name = $1 AND generation = $7 AND NOT deleted`,
+			service, d.Spec, d.Version, d.Generation, d.Node, d.Addr, d.OldGeneration)
+		if err != nil || tag.RowsAffected() != 1 {
+			return err
+		}
+		if _, err := tx.Exec(ctx, "UPDATE deployments SET phase = $2, since = $3 WHERE service = $1", service, phase, now); err != nil {
+			return err
+		}
+		switched = true
+		return nil
+	})
+	return switched, err
+}
+
+// SetDeployPhase moves a deployment from one phase to the next. It reports
+// whether the row was written.
+func (s *Store) SetDeployPhase(ctx context.Context, service string, generation int64, from, to string, now time.Time) (bool, error) {
+	tag, err := s.pool.Exec(ctx, "UPDATE deployments SET phase = $4, since = $5 WHERE service = $1 AND generation = $2 AND phase = $3",
+		service, generation, from, to, now)
+	return tag.RowsAffected() == 1, err
+}
+
+// EndDeploy removes a deployment, whether it finished or was given up.
+func (s *Store) EndDeploy(ctx context.Context, service string, generation int64) error {
+	_, err := s.pool.Exec(ctx, "DELETE FROM deployments WHERE service = $1 AND generation = $2", service, generation)
+	return err
+}
+
+// NodeAssignments returns, from one snapshot, the live services placed on node
+// ordered by name and every deployment under way, so that a switch never shows
+// up in one and not in the other.
+func (s *Store) NodeAssignments(ctx context.Context, node string) ([]Service, []Deployment, error) {
+	var services []Service
+	var deploys []Deployment
+	err := pgx.BeginTxFunc(ctx, s.pool, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly}, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, "SELECT "+serviceColumns+" FROM services WHERE desired_node = $1 AND desired_addr <> '' AND NOT deleted ORDER BY name", node)
+		if err != nil {
+			return err
+		}
+		services, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (Service, error) { return scanService(row) })
+		if err != nil {
+			return err
+		}
+		rows, err = tx.Query(ctx, "SELECT "+deploymentColumns+" FROM deployments ORDER BY service")
+		if err != nil {
+			return err
+		}
+		deploys, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (Deployment, error) { return scanDeployment(row) })
+		return err
+	})
+	return services, deploys, err
 }
