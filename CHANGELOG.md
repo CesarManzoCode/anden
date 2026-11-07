@@ -10,10 +10,15 @@
 - `DeployService` sobre un servicio `ACTIVE` hace rollout (D24): arranca la versión nueva junto a la vieja, con su propia dirección; cuando pasa el healthcheck del agente (HTTP o TCP) cambia el borde y el DNS en un solo paso, espera `overlap_seconds`, y el agente le envía SIGTERM a la vieja y, `draining_seconds` después, SIGKILL. Si el healthcheck no pasa en `healthcheck_timeout_seconds`, destruye la nueva sin tocar el borde y la vieja sigue activa. El despliegue vive en Postgres y sigue tras reiniciar `andend`. Sobre un servicio dormido solo cambia la versión deseada, que se aplica al despertar.
 - `echosvc` responde 503 en `/healthz` si tiene `FAIL_HEALTH`.
 - Criterios de aceptación C16 (`acceptance/c16_rollout.py`) y C17 (`acceptance/c17_rollback.py`), con carga de vegeta a 200 peticiones por segundo durante 30 s.
+- Detección de caída y fencing (D08). El agente tiene una concesión con TTL de 2 s, contada con su reloj monótono desde el envío de cada latido aceptado. Si no la renueva, se autofencia: `cgroup.kill` de todas sus instancias, cierre de las conexiones retenidas y ningún despertar ni arranque hasta registrarse con una época nueva; entonces solo corre lo que el plano de control todavía le asigna. El plano de control declara muerto un nodo a los 4 s sin noticias y solo entonces recoloca sus servicios: lo despierto con el scheduler, del más grande al más pequeño; lo dormido se mueve sin arrancarlo y despierta por `relaunch`. Los latidos con una época vieja se rechazan, y un singleton no se activa en su nodo nuevo mientras el anterior siga vivo y reportándolo.
+- `anden chaos partition nodeN`, `anden chaos heal nodeN` y `anden chaos slow nodeN --delay-ms N`: bajan y suben el enlace del nodo y le agregan retardo con netem. `heal` también quita el retardo.
+- `verify/cmd/writersvc`, el singleton de prueba que escribe un latido cada 50 ms en un archivo de su volumen.
+- Criterios de aceptación C18 (`acceptance/c18_node_crash.py`) y C19 (`acceptance/c19_partition.py`).
 
 ### Cambiado
 
 - `DeployService` ya no para la instancia vieja antes de arrancar la nueva, salvo en un singleton. Mientras haya un despliegue en curso, otro sobre el mismo servicio responde `FAILED_PRECONDITION`.
+- `GetService`, `ListServices` y `anden status` ya no muestran instancias de un nodo muerto.
 
 ## K3: restauración, desglose por fases, descubrimiento y comparación (2026-11-07)
 

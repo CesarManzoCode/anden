@@ -58,7 +58,6 @@ Fuente única de lo que Andén no demuestra. Ningún otro archivo los repite.
 - La colocación sigue D07 (filtro por CPU, memoria y anti-afinidad, y best-fit por recurso dominante en orden decreciente de tamaño), pero es una heurística: no garantiza el máximo de servicios colocados. Su brecha frente a la fuerza bruta de `placeopt` es la que reporta C15. Un servicio que no cabe en ningún nodo se queda en `CREATING` sin error.
 - El scheduler solo coloca lo que no tiene nodo. Un despertar sigue en su nodo hogar aunque ya no quepa: todavía no se elige otro nodo ni se mueve la dirección (D07).
 - `placeopt` recorre (k+1)^n asignaciones, no las 3^n que dice D07: maximizar los servicios colocados exige considerar dejar uno fuera. Solo acepta hasta 12 servicios.
-- Un nodo caído no recoloca sus servicios, y el agente no se autofencia todavía: sin plano de control sigue con lo que tiene.
 - En un despliegue, la instancia nueva va al mismo nodo que la vieja y el scheduler no le reserva CPU ni memoria: durante el despliegue el nodo puede quedar sobrecomprometido.
 - Un singleton no hace rollout: `DeployService` para la instancia vieja y luego arranca la nueva, con tiempo sin servicio, para no tener nunca dos instancias activas.
 - Un despliegue solo hace rollout si el servicio está `ACTIVE`. En cualquier otro estado (dormido, `CREATING`, `WAKING`, `FAILED`) solo cambia la versión deseada, como pide D24 para un servicio dormido.
@@ -77,6 +76,19 @@ Fuente única de lo que Andén no demuestra. Ningún otro archivo los repite.
 - El servidor de blobs (`10.80.0.1:7444`) y la API para agentes no tienen autenticación: su única frontera es la red simulada.
 - La vigencia de un nodo vive en la memoria de `andend`, con su reloj monótono. Tras reiniciar `andend`, un nodo del que no se supo nada cuenta como visto en el arranque, así que se declara muerto 4 s después y no antes.
 - `GetService` y `ListServices` leen todas las instancias reportadas para armar la respuesta. No está medido cuánto cuesta eso con muchos servicios.
+
+## Caída, partición y fencing
+
+- El orden de D08 (autofencing a los 2 s, recolocación a los 4 s) está implementado y probado con relojes falsos en Go. En el datacenter lo miden C18 y C19, que todavía no se han corrido.
+- El agente revisa su concesión cada 50 ms: el `cgroup.kill` llega entre 2 s y unos 2.05 s después de enviar el último latido aceptado, más lo que tarde el kernel. Un despertar o un arranque que ya corría en ese momento puede dejar procesos que el barrido no alcanza; esos se matan cuando ese despertar termina y la instancia se destruye, no en el barrido. No está medido cuánto tarda.
+- El autofencing destruye todas las instancias del nodo, también las dormidas: su `upper/` se borra y el snapshot de `restore` se pierde. Tras una partición de entre 2 y 4 s, que el plano de control no alcanza a ver como caída, el nodo vuelve a arrancar desde cero lo que sigue asignado a él, con tiempo sin servicio.
+- Si `andend` deja de responder latidos más de 2 s (un reinicio lento, Postgres caído, una sobrecarga), todos los agentes se autofencian y matan sus instancias, y las arrancan de nuevo al registrarse con una época nueva. No está medido cuánto tarda `andend` en volver tras un SIGKILL; C2 solo observa que el estado no cambió.
+- Al registrarse con una época nueva, el plano de control borra lo que el nodo reportó con la anterior. Hasta su siguiente reporte (un latido), los servicios de ese nodo se ven como `WAKING`.
+- Lo despierto de un nodo muerto se recoloca en un solo lote con el scheduler. Si no cabe en ningún nodo listo se queda sin nodo ni dirección, y el borde y el DNS lo pierden hasta que quepa.
+- Lo dormido de un nodo muerto se recoloca con el scheduler sobre lo que reserva lo despierto; en esa decisión los dormidos sí se reservan entre sí, aunque después no reserven nada (D07). Si no cabe en ningún nodo listo se queda en el nodo muerto, sin poder despertar.
+- Un singleton no recibe asignación en su nodo nuevo mientras un nodo vivo reporte una instancia suya de otra generación en `RUNNING` o `STARTING`. Si un nodo vivo reportara eso con la nueva ya corriendo, el nodo nuevo la pararía; no se encontró un camino que lo provoque, pero tampoco se midió.
+- La identidad de un escritor de `writersvc` es aleatoria por proceso: un relanzamiento en el mismo nodo cuenta como otro escritor.
+- Un volumen es un directorio de cada nodo, no un volumen compartido: C19 junta los `writers.log` de los tres nodos y los ordena por `t_ns`. Eso solo es válido porque todos escriben `CLOCK_MONOTONIC` del mismo kernel, lo que se razonó (no hay namespace de tiempo) y no se midió.
 
 ## Despertar
 
@@ -136,7 +148,8 @@ Fuente única de lo que Andén no demuestra. Ningún otro archivo los repite.
 - `anden up` necesita `anden-agent` junto a `anden` en `bin/`. Sin él, `_dc-init` falla antes de arrancar `andend` y `up` sale con error.
 - `anden down` solo borra un directorio de estado que tenga `dc.json` o `dc.log`. Si `up` falla, mata el scope pero deja el estado para inspeccionarlo hasta `anden down`.
 - `_dc-init` reinicia `andend` cada vez que sale, sin espera ni límite de intentos.
-- `anden chaos` solo implementa `kill` por ahora; `partition`, `heal` y `slow` no existen todavía.
+- `anden node restart` no existe todavía: un nodo matado con `anden chaos kill` no vuelve, y sus filas de `instances` quedan en Postgres (el plano de control las ignora mientras el nodo esté muerto).
+- `anden chaos slow` solo retrasa lo que sale del netns raíz hacia el nodo (la cola de salida de `veth-nodeN`), no lo que el nodo envía. `heal` quita también ese retardo, y no distingue si `tc qdisc del` falló porque no había retardo o por otra razón: ignora su error.
 - Los procesos de `anden exec` entran al namespace de usuario y de red, no al de montaje del datacenter: ven los montajes del host.
 - Solo el cliente externo y el netns raíz llegan al borde. Desde un nodo, una conexión a `10.80.0.2` agota el tiempo, incluso hacia un servicio de ese mismo nodo: la respuesta del servicio no pasa por el netns raíz y el DNAT no se deshace. Cada nodo tiene una ruta `/32` hacia el cliente para resolver esto solo para el cliente.
 - Con esa ruta, el netns raíz emite redirecciones ICMP (`IcmpOutRedirects`) que el cliente no cuenta. No se investigó por qué.

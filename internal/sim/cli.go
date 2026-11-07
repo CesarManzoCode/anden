@@ -258,6 +258,38 @@ func ChaosKill(state, node string) error {
 	return waitEmpty(cg, 10*time.Second)
 }
 
+// ChaosNet injects a network fault of D06 (partition, heal or slow) on the
+// link of a node, from the root netns of the datacenter.
+func ChaosNet(state, action, node string, delayMs int) error {
+	n, ok := FindNode(node)
+	if !ok {
+		return fmt.Errorf("unknown node %q", node)
+	}
+	steps, err := ChaosSteps(action, n, delayMs)
+	if err != nil {
+		return err
+	}
+	abs, _, err := StatePath(state)
+	if err != nil {
+		return err
+	}
+	dc, err := ReadDC(abs)
+	if err != nil {
+		return err
+	}
+	root, ok := dc.NS[RootName]
+	if !ok {
+		return fmt.Errorf("%s has no %s namespace", dcFile, RootName)
+	}
+	for _, step := range steps {
+		out, err := exec.Command("nsenter", ExecArgs(root, step.Cmd)...).CombinedOutput()
+		if err != nil && !step.Optional {
+			return fmt.Errorf("%s: %w: %s", strings.Join(step.Cmd, " "), err, bytes.TrimSpace(out))
+		}
+	}
+	return nil
+}
+
 func tailFile(path string, n int) string {
 	raw, err := os.ReadFile(path)
 	if err != nil {

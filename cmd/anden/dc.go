@@ -27,6 +27,7 @@ func runDC(cmd string, args []string, stdout, stderr io.Writer) int {
 	jsonOut := fs.Bool("json", false, "print a JSON object on stdout")
 	var ns, sockets *string
 	var timeout *time.Duration
+	var delayMs *int
 	switch cmd {
 	case "up":
 		timeout = fs.Duration("timeout", 120*time.Second, "how long to wait for the three nodes")
@@ -34,6 +35,8 @@ func runDC(cmd string, args []string, stdout, stderr io.Writer) int {
 		timeout = fs.Duration("timeout", 10*time.Second, "timeout of the calls")
 	case "exec":
 		ns = fs.String("ns", "", "client, root or nodeN")
+	case "chaos":
+		delayMs = fs.Int("delay-ms", 0, "delay that slow adds to what goes to the node, in ms")
 	case "_dc", "_dc-init":
 		sockets = fs.String("sockets", "", "directory of the Unix sockets")
 	}
@@ -72,12 +75,25 @@ func runDC(cmd string, args []string, stdout, stderr io.Writer) int {
 	case "status":
 		return runStatus(*state, *timeout, *jsonOut, stdout, stderr)
 	case "chaos":
-		if positional[0] != "kill" || len(rest) != 0 {
+		action, node := positional[0], positional[1]
+		if len(rest) != 0 {
 			fmt.Fprint(stderr, usage)
 			return 2
 		}
-		err = sim.ChaosKill(*state, positional[1])
-		result = map[string]any{"action": positional[0], "node": positional[1]}
+		out := map[string]any{"action": action, "node": node}
+		switch action {
+		case "kill":
+			err = sim.ChaosKill(*state, node)
+		case "partition", "heal":
+			err = sim.ChaosNet(*state, action, node, 0)
+		case "slow":
+			err = sim.ChaosNet(*state, action, node, *delayMs)
+			out["delay_ms"] = *delayMs
+		default:
+			fmt.Fprint(stderr, usage)
+			return 2
+		}
+		result = out
 	case "_dc", "_dc-init":
 		if *sockets == "" {
 			fmt.Fprintln(stderr, "anden: --sockets is required")

@@ -207,3 +207,33 @@ func index(lines []string, s string) int {
 	}
 	return -1
 }
+
+func TestChaosSteps(t *testing.T) {
+	n, _ := FindNode("node2")
+	cases := []struct {
+		action  string
+		delayMs int
+		want    []ChaosStep
+	}{
+		{"partition", 0, []ChaosStep{{Cmd: []string{"ip", "link", "set", "veth-node2", "down"}}}},
+		{"heal", 0, []ChaosStep{
+			{Cmd: []string{"tc", "qdisc", "del", "dev", "veth-node2", "root"}, Optional: true},
+			{Cmd: []string{"ip", "link", "set", "veth-node2", "up"}},
+		}},
+		{"slow", 150, []ChaosStep{{Cmd: []string{"tc", "qdisc", "replace", "dev", "veth-node2", "root", "netem", "delay", "150ms"}}}},
+	}
+	for _, c := range cases {
+		got, err := ChaosSteps(c.action, n, c.delayMs)
+		if err != nil || !reflect.DeepEqual(got, c.want) {
+			t.Errorf("%s: %v, %v", c.action, got, err)
+		}
+	}
+	for _, bad := range []struct {
+		action  string
+		delayMs int
+	}{{"slow", 0}, {"slow", -5}, {"kill", 0}, {"flap", 0}} {
+		if _, err := ChaosSteps(bad.action, n, bad.delayMs); err == nil {
+			t.Errorf("%s with %d ms accepted", bad.action, bad.delayMs)
+		}
+	}
+}

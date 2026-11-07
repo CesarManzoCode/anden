@@ -258,6 +258,35 @@ func parseMemTotal(meminfo []byte) (int64, error) {
 	return 0, fmt.Errorf("no MemTotal in meminfo")
 }
 
+// ChaosStep is one command of a network fault of D06, run in the root netns.
+// An optional one may fail: heal removes a delay that may not be there.
+type ChaosStep struct {
+	Cmd      []string
+	Optional bool
+}
+
+// ChaosSteps are the commands of a network fault on the root side of the
+// node's link: partition takes veth-nodeN down, heal brings it up and removes
+// any delay, and slow adds delayMs to what goes to the node, with netem.
+func ChaosSteps(action string, n Node, delayMs int) ([]ChaosStep, error) {
+	switch action {
+	case "partition":
+		return []ChaosStep{{Cmd: []string{"ip", "link", "set", n.RootVeth, "down"}}}, nil
+	case "heal":
+		return []ChaosStep{
+			{Cmd: []string{"tc", "qdisc", "del", "dev", n.RootVeth, "root"}, Optional: true},
+			{Cmd: []string{"ip", "link", "set", n.RootVeth, "up"}},
+		}, nil
+	case "slow":
+		if delayMs <= 0 {
+			return nil, fmt.Errorf("slow needs --delay-ms above 0")
+		}
+		return []ChaosStep{{Cmd: []string{"tc", "qdisc", "replace", "dev", n.RootVeth, "root", "netem", "delay",
+			strconv.Itoa(delayMs) + "ms"}}}, nil
+	}
+	return nil, fmt.Errorf("unknown chaos action %q", action)
+}
+
 // ExecArgs is the nsenter command line of `anden exec`.
 func ExecArgs(pid int, cmd []string) []string {
 	return append([]string{"--preserve-credentials", "-U", "-n", "-t", strconv.Itoa(pid), "--"}, cmd...)

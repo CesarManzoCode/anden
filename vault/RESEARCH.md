@@ -221,6 +221,17 @@ No se ejecutó C13 ni C14 en esta sesión. Que runc y crun funcionen dentro del 
 
 En todas las corridas, `criu` deja `rlimit: Can't setup RLIMIT_NOFILE for self: Operation not permitted` como error y sigue.
 
+## Fallos y fencing (consultado el 7 nov 2026 para k4-03)
+
+| Fuente | Revisión | Dato usado |
+|---|---|---|
+| `man tc` | iproute2 7.3.0 | `tc qdisc [ add \| change \| replace \| link \| delete ] dev DEV`; `replace` «performs a nearly atomic remove/add on an existing node id. If the node does not exist yet it is created»; para quitar, `tc qdisc del dev DEV root` |
+| `man tc-netem` | iproute2 7.3.0 | `DELAY := delay TIME [ JITTER [ CORRELATION ]]`; ejemplo `tc qdisc add dev eth0 root netem delay 100ms` |
+| `man ip-link` | iproute2 7.3.0 | `ip link set { DEVICE \| dev DEVICE \| group GROUP } [ { up \| down } ]` |
+| Go, `go doc maps.Clone` y `go doc slices.ContainsFunc` | go1.27.3 | Existen en la biblioteca estándar |
+
+En esta sesión no se ejecutó `tc qdisc replace` ni `tc qdisc del`: lo ejecutado en K0 fue `tc qdisc add ... netem delay` y alternar `link set down/up` (tabla de herramientas). No se comprobó qué mensaje da `tc qdisc del` sin un qdisc propio; `anden chaos heal` ignora su error.
+
 ## Documentación oficial sin revisión fija (consultada el 6 nov 2026)
 
 | Fuente | Dato |

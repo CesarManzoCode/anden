@@ -166,7 +166,7 @@ func (a *andenService) reply(ctx context.Context, svc store.Service, err error) 
 		return nil, grpcError(err)
 	}
 	var own []store.Instance
-	for _, in := range instances {
+	for _, in := range liveOnly(instances, a.cp.live.ready) {
 		if in.Service == svc.Name {
 			own = append(own, in)
 		}
@@ -202,7 +202,7 @@ func (a *andenService) ListServices(ctx context.Context, _ *andenv1.ListServices
 		return nil, grpcError(err)
 	}
 	byService := map[string][]store.Instance{}
-	for _, in := range instances {
+	for _, in := range liveOnly(instances, a.cp.live.ready) {
 		byService[in.Service] = append(byService[in.Service], in)
 	}
 	out := &andenv1.ListServicesResponse{}

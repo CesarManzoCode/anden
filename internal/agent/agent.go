@@ -1,6 +1,7 @@
 // Package agent is the node agent of Andén: it registers with the control
-// plane, renews its lease every 500 ms and makes the instances of its node
-// match what the control plane asks for in each heartbeat response.
+// plane, renews its lease every 500 ms, fences itself when the lease runs out
+// (D08) and makes the instances of its node match what the control plane asks
+// for in each heartbeat response.
 package agent
 
 import (
@@ -74,6 +75,8 @@ type Agent struct {
 	proxy   *wake.Proxy
 	// beatNow asks for a heartbeat without waiting for the tick.
 	beatNow chan struct{}
+	// lease is the lease of D08: without it nothing starts or wakes.
+	lease *lease
 	// imageMu serializes transfers and overlay mounts, because a mount extracts
 	// the layers it lacks: two instances of one image would extract them twice.
 	imageMu sync.Mutex
@@ -129,13 +132,15 @@ func New(cfg Config) (*Agent, error) {
 		nft:       wake.NewNFT(),
 		proxy:     wake.NewProxy(),
 		beatNow:   make(chan struct{}, 1),
+		lease:     newLease(time.Now),
 		instances: map[string]*instance{},
 		intents:   map[string]*intent{},
 	}, nil
 }
 
-// Run keeps the heartbeat and the reconcile loop going until ctx ends. If the
-// control plane is gone the instances keep running as they are.
+// Run keeps the heartbeat, the reconcile loop and the watch of the lease going
+// until ctx ends. If the control plane is gone the instances keep running for
+// the rest of the lease, and the fence ends them when it runs out.
 func (a *Agent) Run(ctx context.Context) error {
 	if err := a.nft.Setup(); err != nil {
 		return err
@@ -163,6 +168,7 @@ func (a *Agent) Run(ctx context.Context) error {
 	}
 	defer conn.Close()
 	go a.reconcileLoop(ctx)
+	go a.fenceLoop(ctx)
 
 	s := &session{client: andenv1.NewAgentControlClient(conn)}
 	a.mu.Lock()
@@ -201,7 +207,12 @@ type session struct {
 func (a *Agent) beat(ctx context.Context, s *session) error {
 	ctx, cancel := context.WithTimeout(ctx, rpcTimeout)
 	defer cancel()
+	// A fenced node comes back only with a new epoch (D08).
+	if !a.lease.held() {
+		s.epoch = 0
+	}
 	if s.epoch == 0 {
+		asked := time.Now()
 		resp, err := s.client.Register(ctx, &andenv1.RegisterRequest{
 			Node: a.cfg.Node, Addr: a.cfg.Addr, CpuMillis: a.cfg.CPUMillis, MemoryMib: a.cfg.MemoryMiB, Subnet: a.cfg.Subnet,
 		})
@@ -214,6 +225,7 @@ func (a *Agent) beat(ctx context.Context, s *session) error {
 		a.blobsURL = resp.GetBlobsUrl()
 		a.epoch = s.epoch
 		a.mu.Unlock()
+		a.lease.grant(asked, msDuration(resp.GetLeaseTtlMs()))
 		log.Printf("registered as %s, epoch %d", a.cfg.Node, s.epoch)
 	}
 	// Intents go first, so a report of what they caused finds them applied.
@@ -221,12 +233,18 @@ func (a *Agent) beat(ctx context.Context, s *session) error {
 	if err != nil {
 		return a.refused(s, err)
 	}
+	asked := time.Now()
 	resp, err := s.client.Heartbeat(ctx, &andenv1.HeartbeatRequest{Node: a.cfg.Node, Epoch: s.epoch})
 	if err != nil {
 		return a.refused(s, err)
 	}
+	a.lease.renew(asked, msDuration(resp.GetLeaseTtlMs()))
 	a.mu.Lock()
-	a.desired = resp.GetAssignments()
+	// The answer to a heartbeat sent before a fence is not followed: the node
+	// waits for the one after its new registration.
+	if a.lease.held() {
+		a.desired = resp.GetAssignments()
+	}
 	for _, sent := range settled {
 		if a.intents[sent.id] == sent {
 			delete(a.intents, sent.id)
@@ -364,7 +382,11 @@ func (a *Agent) reconcileLoop(ctx context.Context) {
 
 // reconcile starts, stops, sleeps and wakes what the comparison says. Each action
 // runs on its own goroutine: an image transfer must not delay anything else.
+// Without a valid lease it does nothing: the fence takes care of the node.
 func (a *Agent) reconcile(ctx context.Context) {
+	if !a.lease.valid() {
+		return
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	desired := a.effective()

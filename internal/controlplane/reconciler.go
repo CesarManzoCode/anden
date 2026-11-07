@@ -38,6 +38,7 @@ type State interface {
 	Instances(ctx context.Context) ([]store.Instance, error)
 	ListNodes(ctx context.Context) ([]store.Node, error)
 	SetPlacement(ctx context.Context, name string, revision int64, node, addr string) (bool, error)
+	Relocate(ctx context.Context, name string, revision int64, from, to string) (bool, error)
 	SetObserved(ctx context.Context, name string, revision int64, obs store.Observed) (bool, error)
 	Purge(ctx context.Context, name string, revision int64) error
 	Deployments(ctx context.Context) ([]store.Deployment, error)
@@ -55,7 +56,8 @@ type State interface {
 type Reconciler struct {
 	state State
 	kick  chan struct{}
-	// ready says whether a node can take new instances.
+	// ready says whether a node can take new instances; the services of one
+	// that is not ready are relocated (D08).
 	ready func(node string) bool
 	// edge is nil when andend runs without an edge address.
 	edge *Edge
@@ -105,6 +107,7 @@ func (r *Reconciler) Pass(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	instances = liveOnly(instances, r.ready)
 	deploys, err := r.state.Deployments(ctx)
 	if err != nil {
 		return err
@@ -123,7 +126,14 @@ func (r *Reconciler) Pass(ctx context.Context) error {
 			return err
 		}
 	}
-	if err := r.place(ctx, services, deploys); err != nil {
+	nodes, err := r.state.ListNodes(ctx)
+	if err != nil {
+		return err
+	}
+	if err := r.relocate(ctx, services, nodes); err != nil {
+		return err
+	}
+	if err := r.place(ctx, services, deploys, nodes); err != nil {
 		return err
 	}
 	if r.records != nil {
@@ -172,11 +182,7 @@ func specOf(svc store.Service) (*andenv1.ServiceSpec, error) {
 // a later pass; lost revision races too. The new instance of a deployment gets
 // an address of its node the same way, and the addresses of both instances of
 // a deployment stay taken until it ends.
-func (r *Reconciler) place(ctx context.Context, services []store.Service, deploys []store.Deployment) error {
-	nodes, err := r.state.ListNodes(ctx)
-	if err != nil {
-		return err
-	}
+func (r *Reconciler) place(ctx context.Context, services []store.Service, deploys []store.Deployment, nodes []store.Node) error {
 	subnets := map[string]string{}
 	problem := scheduler.Problem{}
 	for _, n := range nodes {
@@ -320,12 +326,14 @@ func toAssignments(services []store.Service) ([]*andenv1.Assignment, error) {
 	return out, nil
 }
 
-// liveInstance returns the running instance of the highest version, or nil.
+// liveInstance returns the running instance of the highest version and, among
+// those, of the highest generation, or nil.
 func liveInstance(instances []store.Instance) *store.Instance {
 	var live *store.Instance
 	for i := range instances {
 		in := &instances[i]
-		if in.State == instRunning && (live == nil || in.Version > live.Version) {
+		if in.State == instRunning && (live == nil || in.Version > live.Version ||
+			(in.Version == live.Version && in.Generation > live.Generation)) {
 			live = in
 		}
 	}

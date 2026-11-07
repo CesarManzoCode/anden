@@ -235,6 +235,11 @@ func (c *instanceControl) Halt() error {
 // wake, waiting for its answer at most placementTimeout (see place).
 func (c *instanceControl) Start(phases *wake.Phases) error {
 	in := c.in
+	// A fenced node wakes nothing until it registers with a new epoch (D08):
+	// the machine fails and closes the connections it held.
+	if !c.a.lease.valid() {
+		return errFenced
+	}
 	c.a.setState(in, andenv1.InstanceState_INSTANCE_STATE_STARTING)
 	c.a.declare(in, true)
 	c.a.place(in)
@@ -640,15 +645,21 @@ func (a *Agent) probe(ctx context.Context, target string, hc *andenv1.Healthchec
 // that is done it keeps being reported as it was: its address and processes are
 // still in use.
 func (a *Agent) stop(in *instance) {
-	in.cancel()
-	<-in.started
-	in.machine.Close()
 	a.mu.Lock()
 	grace := in.drain
 	a.mu.Unlock()
 	if grace == 0 {
 		grace = stopGrace
 	}
+	a.remove(in, grace)
+}
+
+// remove is stop with grace as the time between SIGTERM and cgroup.kill; with 0,
+// as in a fence, the processes are killed at once.
+func (a *Agent) remove(in *instance, grace time.Duration) {
+	in.cancel()
+	<-in.started
+	in.machine.Close()
 	a.terminate(in, grace)
 	a.teardown(in)
 	a.proxy.Unregister(in.machine)

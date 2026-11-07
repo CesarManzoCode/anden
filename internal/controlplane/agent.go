@@ -3,6 +3,8 @@ package controlplane
 import (
 	"context"
 	"errors"
+	"maps"
+	"slices"
 	"sync"
 	"time"
 
@@ -21,33 +23,74 @@ const (
 	deadAfter         = 2 * leaseTTL
 )
 
-// liveness tracks when each node was last heard from, with the monotonic
-// clock. A node not heard from since andend started counts from the start,
-// so a restart of the control plane does not declare every node dead.
+// liveness is the failure detector of D08: it tracks when each node was last
+// heard from, with the monotonic clock, and a node not heard from in 2×TTL is
+// dead. Its agent stopped renewing its lease at least 2×TTL ago, so it fenced
+// itself a TTL before. A node not heard from since andend started counts from
+// the start, so a restart of the control plane does not declare every node dead.
 type liveness struct {
 	mu      sync.Mutex
+	now     func() time.Time
 	started time.Time
 	seen    map[string]time.Time
 }
 
-func newLiveness() *liveness {
-	return &liveness{started: time.Now(), seen: map[string]time.Time{}}
+func newLiveness(now func() time.Time) *liveness {
+	return &liveness{now: now, started: now(), seen: map[string]time.Time{}}
 }
 
 func (l *liveness) touch(node string) {
 	l.mu.Lock()
-	l.seen[node] = time.Now()
+	l.seen[node] = l.now()
 	l.mu.Unlock()
 }
 
 func (l *liveness) ready(node string) bool {
+	return l.snapshot()(node)
+}
+
+// snapshot is ready as it stands now, for a decision that reads the store
+// afterwards: a node it finds alive had registered, and the store had dropped
+// its old reports, before that read.
+func (l *liveness) snapshot() func(node string) bool {
 	l.mu.Lock()
-	last, ok := l.seen[node]
+	seen, started, now := maps.Clone(l.seen), l.started, l.now()
 	l.mu.Unlock()
-	if !ok {
-		last = l.started
+	return func(node string) bool {
+		last, ok := seen[node]
+		if !ok {
+			last = started
+		}
+		return now.Sub(last) < deadAfter
 	}
-	return time.Since(last) < deadAfter
+}
+
+// checkEpoch refuses what a node sends with an epoch that is not its current
+// one: it comes from before the node registered again, as what a fenced agent
+// sent before its new registration (D08).
+func checkEpoch(node string, current int64, got uint64) error {
+	if uint64(current) != got {
+		return status.Errorf(codes.FailedPrecondition, "epoch %d of %s is stale, current is %d", got, node, current)
+	}
+	return nil
+}
+
+// holdSingletons drops from what node receives each singleton of which a node
+// that is not dead still reports an instance of another generation, running or
+// starting: a singleton becomes active on its new node only once the previous
+// one has let it go or has been declared dead (D08).
+func holdSingletons(node string, assignments []*andenv1.Assignment, instances []store.Instance, ready func(string) bool) []*andenv1.Assignment {
+	out := make([]*andenv1.Assignment, 0, len(assignments))
+	for _, as := range assignments {
+		held := as.GetSpec().GetSingleton() && slices.ContainsFunc(instances, func(in store.Instance) bool {
+			return in.Service == as.GetSpec().GetName() && in.Node != node && in.Generation != int64(as.GetGeneration()) &&
+				(in.State == instRunning || in.State == instStarting) && ready(in.Node)
+		})
+		if !held {
+			out = append(out, as)
+		}
+	}
+	return out
 }
 
 type agentService struct {
@@ -55,7 +98,8 @@ type agentService struct {
 	cp *ControlPlane
 }
 
-// Register gives the node a new epoch; reports with an older one are refused.
+// Register gives the node a new epoch; reports with an older one are refused,
+// and what it reported under the last one is dropped.
 func (a *agentService) Register(ctx context.Context, req *andenv1.RegisterRequest) (*andenv1.RegisterResponse, error) {
 	if req.GetNode() == "" {
 		return nil, status.Error(codes.InvalidArgument, "node is required")
@@ -84,10 +128,11 @@ func (a *agentService) Heartbeat(ctx context.Context, req *andenv1.HeartbeatRequ
 	if err != nil {
 		return nil, grpcError(err)
 	}
-	if uint64(epoch) != req.GetEpoch() {
-		return nil, status.Errorf(codes.FailedPrecondition, "epoch %d of %s is stale, current is %d", req.GetEpoch(), req.GetNode(), epoch)
+	if err := checkEpoch(req.GetNode(), epoch, req.GetEpoch()); err != nil {
+		return nil, err
 	}
 	a.cp.live.touch(req.GetNode())
+	ready := a.cp.live.snapshot()
 	services, deploys, err := a.cp.store.NodeAssignments(ctx, req.GetNode())
 	if err != nil {
 		return nil, grpcError(err)
@@ -98,6 +143,13 @@ func (a *agentService) Heartbeat(ctx context.Context, req *andenv1.HeartbeatRequ
 	}
 	if assignments, err = deployAssignments(req.GetNode(), assignments, deploys); err != nil {
 		return nil, grpcError(err)
+	}
+	if slices.ContainsFunc(assignments, func(as *andenv1.Assignment) bool { return as.GetSpec().GetSingleton() }) {
+		instances, err := a.cp.store.Instances(ctx)
+		if err != nil {
+			return nil, grpcError(err)
+		}
+		assignments = holdSingletons(req.GetNode(), assignments, instances, ready)
 	}
 	return &andenv1.HeartbeatResponse{LeaseTtlMs: uint32(leaseTTL / time.Millisecond), Assignments: assignments}, nil
 }
@@ -151,8 +203,8 @@ func (a *agentService) SetAwake(ctx context.Context, req *andenv1.SetAwakeReques
 	if err != nil {
 		return nil, grpcError(err)
 	}
-	if uint64(epoch) != req.GetEpoch() {
-		return nil, status.Errorf(codes.FailedPrecondition, "epoch %d of %s is stale, current is %d", req.GetEpoch(), req.GetNode(), epoch)
+	if err := checkEpoch(req.GetNode(), epoch, req.GetEpoch()); err != nil {
+		return nil, err
 	}
 	a.cp.live.touch(req.GetNode())
 	_, err = a.cp.store.UpdateDesired(ctx, req.GetService(), func(s *store.Service) error {

@@ -249,6 +249,17 @@ func (s *Store) SetPlacement(ctx context.Context, name string, revision int64, n
 	return tag.RowsAffected() == 1, err
 }
 
+// Relocate takes a live service off node from, if it is still there and at
+// revision: to becomes its home, empty for the reconciler to choose one, it
+// gets a new generation and loses its address. It reports whether the row was
+// written.
+func (s *Store) Relocate(ctx context.Context, name string, revision int64, from, to string) (bool, error) {
+	tag, err := s.pool.Exec(ctx, `UPDATE services SET desired_node = $4, desired_addr = '', generation = generation + 1,
+		revision = revision + 1 WHERE name = $1 AND revision = $2 AND desired_node = $3 AND NOT deleted`,
+		name, revision, from, to)
+	return tag.RowsAffected() == 1, err
+}
+
 // Purge removes a service marked as deleted, if still at revision.
 func (s *Store) Purge(ctx context.Context, name string, revision int64) error {
 	_, err := s.pool.Exec(ctx, "DELETE FROM services WHERE name = $1 AND revision = $2 AND deleted", name, revision)
@@ -256,13 +267,22 @@ func (s *Store) Purge(ctx context.Context, name string, revision int64) error {
 }
 
 // RegisterNode records a node and returns its new epoch, one more than the
-// last one it had.
+// last one it had. What the node reported under its last epoch goes in the
+// same transaction: an agent registers again after it fenced itself, or after
+// it restarted, and either way it no longer has those instances.
 func (s *Store) RegisterNode(ctx context.Context, n Node) (int64, error) {
 	var epoch int64
-	err := s.pool.QueryRow(ctx, `INSERT INTO nodes (name, addr, subnet, epoch, cpu_millis, memory_mib) VALUES ($1, $2, $3, 1, $4, $5)
-		ON CONFLICT (name) DO UPDATE SET addr = excluded.addr, subnet = excluded.subnet, epoch = nodes.epoch + 1,
-			cpu_millis = excluded.cpu_millis, memory_mib = excluded.memory_mib
-		RETURNING epoch`, n.Name, n.Addr, n.Subnet, n.CPUMillis, n.MemoryMiB).Scan(&epoch)
+	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+		err := tx.QueryRow(ctx, `INSERT INTO nodes (name, addr, subnet, epoch, cpu_millis, memory_mib) VALUES ($1, $2, $3, 1, $4, $5)
+			ON CONFLICT (name) DO UPDATE SET addr = excluded.addr, subnet = excluded.subnet, epoch = nodes.epoch + 1,
+				cpu_millis = excluded.cpu_millis, memory_mib = excluded.memory_mib
+			RETURNING epoch`, n.Name, n.Addr, n.Subnet, n.CPUMillis, n.MemoryMiB).Scan(&epoch)
+		if err != nil {
+			return err
+		}
+		_, err = tx.Exec(ctx, "DELETE FROM instances WHERE node = $1", n.Name)
+		return err
+	})
 	return epoch, err
 }
 

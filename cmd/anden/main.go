@@ -13,7 +13,8 @@ const usage = `usage:
   anden down [--state DIR] [--json]
   anden status [--state DIR] [--json]
   anden exec --ns client|root|nodeN [--state DIR] -- CMD...
-  anden chaos kill nodeN [--state DIR] [--json]
+  anden chaos kill|partition|heal nodeN [--state DIR] [--json]
+  anden chaos slow nodeN --delay-ms N [--state DIR] [--json]
   anden image import --layout DIR:TAG [--state DIR] [--json]
   anden image unpack --digest D --dest STORE [--state DIR] [--json]
   anden image mount --digest D --dest DIR [--state DIR] [--json]

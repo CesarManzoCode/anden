@@ -39,7 +39,7 @@ type ControlPlane struct {
 }
 
 func New(st *store.Store, opts Options) *ControlPlane {
-	c := &ControlPlane{store: st, rec: NewReconciler(st), live: newLiveness(), opts: opts}
+	c := &ControlPlane{store: st, rec: NewReconciler(st), live: newLiveness(time.Now), opts: opts}
 	c.rec.ready = c.live.ready
 	if opts.EdgeIP != "" {
 		c.rec.edge = NewEdge(opts.EdgeIP)
