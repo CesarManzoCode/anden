@@ -10,12 +10,14 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"time"
 
 	"google.golang.org/grpc"
 
 	andenv1 "github.com/CesarManzoCode/anden/gen/anden/v1"
 	"github.com/CesarManzoCode/anden/internal/dns"
+	"github.com/CesarManzoCode/anden/internal/metrics"
 	"github.com/CesarManzoCode/anden/internal/store"
 )
 
@@ -29,6 +31,10 @@ type Options struct {
 	EdgeIP string
 	// DNSListen is the UDP and TCP address of the DNS of D22.
 	DNSListen string
+	// MetricsListen is the TCP address of the aggregated /metrics.
+	MetricsListen string
+	// AgentMetricsPort is the port of /metrics on the address of each agent.
+	AgentMetricsPort int
 }
 
 type ControlPlane struct {
@@ -55,6 +61,22 @@ func (c *ControlPlane) blobsURL() string {
 		return ""
 	}
 	return "http://" + c.opts.BlobsListen
+}
+
+// metricsNodes are the registered nodes for the aggregate: the /metrics of
+// each agent and whether the failure detector counts it alive.
+func (c *ControlPlane) metricsNodes(ctx context.Context) ([]metrics.Node, error) {
+	ready := c.live.snapshot()
+	nodes, err := c.store.ListNodes(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]metrics.Node, 0, len(nodes))
+	for _, n := range nodes {
+		url := "http://" + net.JoinHostPort(n.Addr, strconv.Itoa(c.opts.AgentMetricsPort)) + "/metrics"
+		out = append(out, metrics.Node{Name: n.Name, URL: url, Up: ready(n.Name)})
+	}
+	return out, nil
 }
 
 var blobHexRE = regexp.MustCompile(`^[0-9a-f]{64}$`)
@@ -111,6 +133,26 @@ func (c *ControlPlane) Serve(ctx context.Context, unixPath, tcpAddr string, inte
 		go func() {
 			if err := blobs.Serve(bl); !errors.Is(err, http.ErrServerClosed) {
 				log.Printf("blob server: %v", err)
+			}
+		}()
+	}
+
+	if c.opts.MetricsListen != "" {
+		ml, err := net.Listen("tcp", c.opts.MetricsListen)
+		if err != nil {
+			for _, l := range listeners {
+				l.Close()
+			}
+			return fmt.Errorf("metrics: %w", err)
+		}
+		mux := http.NewServeMux()
+		mux.Handle("GET /metrics", &metrics.Aggregator{Nodes: c.metricsNodes,
+			Client: &http.Client{Transport: &http.Transport{DisableKeepAlives: true}}})
+		msrv := &http.Server{Handler: mux}
+		defer msrv.Close()
+		go func() {
+			if err := msrv.Serve(ml); !errors.Is(err, http.ErrServerClosed) {
+				log.Printf("metrics: %v", err)
 			}
 		}()
 	}

@@ -1,0 +1,79 @@
+# promtool test rules ops/alerts_test.yml
+rule_files:
+  - alerts.yml
+
+evaluation_interval: 1m
+
+tests:
+  # node2 goes down at 2m and stays down; node1 stays up.
+  - interval: 1m
+    input_series:
+      - series: 'anden_node_up{node="node1"}'
+        values: '1x10'
+      - series: 'anden_node_up{node="node2"}'
+        values: '1 1 0x8'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: AndenNodeDown
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: AndenNodeDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              node: node2
+            exp_annotations:
+              summary: "Node node2 is down"
+              runbook: ops/runbooks/AndenNodeDown.md
+
+  # Healthy: every node up the whole time.
+  - interval: 1m
+    input_series:
+      - series: 'anden_node_up{node="node1"}'
+        values: '1x10'
+      - series: 'anden_node_up{node="node2"}'
+        values: '1x10'
+      - series: 'anden_node_up{node="node3"}'
+        values: '1x10'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: AndenNodeDown
+        exp_alerts: []
+
+  # Over budget: 10 wakes a minute by relaunch, all between 1 s and 2.5 s.
+  - interval: 1m
+    input_series:
+      - series: 'anden_wake_duration_seconds_bucket{route="relaunch",le="0.5"}'
+        values: '0x20'
+      - series: 'anden_wake_duration_seconds_bucket{route="relaunch",le="1"}'
+        values: '0x20'
+      - series: 'anden_wake_duration_seconds_bucket{route="relaunch",le="2.5"}'
+        values: '0+10x20'
+      - series: 'anden_wake_duration_seconds_bucket{route="relaunch",le="+Inf"}'
+        values: '0+10x20'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: AndenWakeOverBudget
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              route: relaunch
+            exp_annotations:
+              summary: "p99 of wakes by relaunch is over the 1 s budget"
+              runbook: ops/runbooks/AndenWakeOverBudget.md
+
+  # Healthy: 10 wakes a minute by restore, all under 0.5 s.
+  - interval: 1m
+    input_series:
+      - series: 'anden_wake_duration_seconds_bucket{route="restore",le="0.5"}'
+        values: '0+10x20'
+      - series: 'anden_wake_duration_seconds_bucket{route="restore",le="1"}'
+        values: '0+10x20'
+      - series: 'anden_wake_duration_seconds_bucket{route="restore",le="2.5"}'
+        values: '0+10x20'
+      - series: 'anden_wake_duration_seconds_bucket{route="restore",le="+Inf"}'
+        values: '0+10x20'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: AndenWakeOverBudget
+        exp_alerts: []

@@ -1,0 +1,21 @@
+# Alerts over the aggregate of andend, 10.80.0.1:9090/metrics (contract, section 5).
+# Each alert names its runbook, a path of the repository, in annotations.runbook.
+groups:
+  - name: anden
+    rules:
+      - alert: AndenNodeDown
+        expr: anden_node_up == 0
+        for: 30s
+        labels:
+          severity: critical
+        annotations:
+          summary: "Node {{ $labels.node }} is down"
+          runbook: ops/runbooks/AndenNodeDown.md
+      - alert: AndenWakeOverBudget
+        expr: histogram_quantile(0.99, sum by (le, route) (rate(anden_wake_duration_seconds_bucket[5m]))) > 1
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "p99 of wakes by {{ $labels.route }} is over the 1 s budget"
+          runbook: ops/runbooks/AndenWakeOverBudget.md

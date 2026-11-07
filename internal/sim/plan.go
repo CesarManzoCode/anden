@@ -17,16 +17,18 @@ import (
 )
 
 const (
-	NodeCount  = 3
-	Bridge     = "anden0"
-	RootIP     = "10.80.0.1"
-	EdgeIP     = "10.80.0.2"
-	ClientIP   = "10.80.0.100"
-	AgentPort  = 7443
-	BlobsPort  = 7444
-	DNSPort    = 53
-	ClientName = "client"
-	RootName   = "root"
+	NodeCount = 3
+	Bridge    = "anden0"
+	RootIP    = "10.80.0.1"
+	EdgeIP    = "10.80.0.2"
+	ClientIP  = "10.80.0.100"
+	AgentPort = 7443
+	BlobsPort = 7444
+	DNSPort   = 53
+	// MetricsPort is where andend and the agents serve /metrics, each on its address.
+	MetricsPort = 9090
+	ClientName  = "client"
+	RootName    = "root"
 
 	// Controllers enabled in every cgroup that has children.
 	Controllers = "+cpu +memory +pids"
@@ -221,6 +223,7 @@ func AgentArgs(n Node, state, dcCgroup, binDir string) []string {
 		"--cgroup", filepath.Join(dcCgroup, n.Name),
 		"--subnet", n.Subnet,
 		"--runtime", filepath.Join(binDir, "anden-runtime"),
+		"--metrics-listen", n.IP + ":" + strconv.Itoa(MetricsPort),
 	}
 }
 
@@ -234,6 +237,8 @@ func AndendArgs(state, sockets string) []string {
 		"--blobs-listen", RootIP + ":" + strconv.Itoa(BlobsPort),
 		"--edge-ip", EdgeIP,
 		"--dns-listen", RootIP + ":" + strconv.Itoa(DNSPort),
+		"--metrics-listen", RootIP + ":" + strconv.Itoa(MetricsPort),
+		"--agent-metrics-port", strconv.Itoa(MetricsPort),
 	}
 }
 

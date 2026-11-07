@@ -158,6 +158,14 @@ Fuente única de lo que Andén no demuestra. Ningún otro archivo los repite.
 
 - Toda cifra vale para esta máquina (Ryzen 5 5600G, 14 GiB visibles, btrfs, gobernador `powersave`). No se compara con la de Railway como «más rápido»: la suya es de otra plataforma y de 2023.
 
+## Métricas y alertas
+
+- Los histogramas de despertar viven en la memoria de cada agente: si un agente se reinicia, sus conteos vuelven a cero. `wake_events.jsonl` sí persiste.
+- El agregado de `andend` suma lo que responden los agentes en ese momento, con 1 s de espera por agente. Un agente caído o particionado queda fuera de la suma, y los conteos bajan como si se hubieran reiniciado.
+- `anden_wake_duration_seconds` es la suma de fases que mide el agente desde su `accept` hasta el primer byte; no es el tiempo del cliente, que solo C12 compara con ella.
+- Las alertas se prueban con `promtool test rules` sobre series sintéticas. Ningún Prometheus ni Alertmanager evalúa las reglas contra el datacenter.
+- No hay comando para reiniciar el agente de un nodo caído, así que el runbook de `AndenNodeDown` solo puede esperar la recolocación o recrear el datacenter.
+
 ## Alcance de lo medido en K1
 
 - C3 mide la conformidad solo contra runtime-tools en el commit `bd3b0bd00f44e15f0f1ff4130c61dbea1b1c56cc`. Otra versión de la suite no está medida.

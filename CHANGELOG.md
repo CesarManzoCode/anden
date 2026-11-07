@@ -1,5 +1,13 @@
 # Historial de cambios
 
+## K5: observabilidad, escala y construcción (en curso)
+
+### Agregado
+
+- Cada agente sirve `/metrics` en `<ip del nodo>:9090` con los histogramas `anden_wake_phase_seconds{phase, route}` y `anden_wake_duration_seconds{route}`, alimentados por cada evento de despertar. `andend` sirve en `10.80.0.1:9090/metrics` la suma de lo que reportan los agentes y `anden_node_up{node}`, que vale 0 cuando el plano de control declara muerto el nodo.
+- `ops/alerts.yml` con `AndenNodeDown` y `AndenWakeOverBudget` (p99 de despertar sobre 1 s), sus pruebas en `ops/alerts_test.yml` y un runbook por alerta en `ops/runbooks/`.
+- Criterios de aceptación C23 (`acceptance/c23_metrics.py`), C24 (`acceptance/c24_alerts.py`) y C25 (`acceptance/c25_runbooks.py`).
+
 ## K4: colocación, rollouts, caída y partición (2026-11-07)
 
 ### Agregado

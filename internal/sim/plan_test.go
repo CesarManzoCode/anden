@@ -150,14 +150,14 @@ func TestCommandLines(t *testing.T) {
 	got := AgentArgs(n, "/s", "/sys/fs/cgroup/x/anden-h.scope/dc", "/b")
 	want := []string{"--node", "node1", "--addr", "10.80.0.11", "--control", "10.80.0.1:7443",
 		"--state", "/s/nodes/node1", "--cgroup", "/sys/fs/cgroup/x/anden-h.scope/dc/node1",
-		"--subnet", "10.81.0.0/16", "--runtime", "/b/anden-runtime"}
+		"--subnet", "10.81.0.0/16", "--runtime", "/b/anden-runtime", "--metrics-listen", "10.80.0.11:9090"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("AgentArgs = %q", got)
 	}
 	if got := AndendArgs("/s", "/run/user/1000/anden-h"); !reflect.DeepEqual(got, []string{
 		"--api-socket", "/run/user/1000/anden-h/api.sock", "--listen", "10.80.0.1:7443", "--pg-socket-dir", "/run/user/1000/anden-h",
 		"--registry", "/s/registry", "--blobs-listen", "10.80.0.1:7444", "--edge-ip", "10.80.0.2",
-		"--dns-listen", "10.80.0.1:53"}) {
+		"--dns-listen", "10.80.0.1:53", "--metrics-listen", "10.80.0.1:9090", "--agent-metrics-port", "9090"}) {
 		t.Fatalf("AndendArgs = %q", got)
 	}
 	if got := ExecArgs(42, []string{"nft", "list", "tables"}); !reflect.DeepEqual(got, []string{

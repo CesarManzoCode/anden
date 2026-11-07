@@ -27,6 +27,7 @@ import (
 
 	andenv1 "github.com/CesarManzoCode/anden/gen/anden/v1"
 	"github.com/CesarManzoCode/anden/internal/image"
+	"github.com/CesarManzoCode/anden/internal/metrics"
 	"github.com/CesarManzoCode/anden/internal/wake"
 )
 
@@ -62,6 +63,8 @@ type Config struct {
 	Runtime   string
 	CPUMillis uint32
 	MemoryMiB uint32
+	// MetricsListen is where /metrics is served; empty disables it.
+	MetricsListen string
 }
 
 type Agent struct {
@@ -82,6 +85,8 @@ type Agent struct {
 	imageMu sync.Mutex
 	// eventsMu keeps the lines of wake_events.jsonl whole.
 	eventsMu sync.Mutex
+	// wakes are the histograms of the wake events, served on /metrics.
+	wakes *metrics.Wakes
 	// statsMu guards stats, the counters of each service by name, and the
 	// writes of transitions.json.
 	statsMu sync.Mutex
@@ -131,6 +136,7 @@ func New(cfg Config) (*Agent, error) {
 		client:    &http.Client{Transport: &http.Transport{DisableKeepAlives: true}},
 		nft:       wake.NewNFT(),
 		proxy:     wake.NewProxy(),
+		wakes:     metrics.NewWakes(),
 		beatNow:   make(chan struct{}, 1),
 		lease:     newLease(time.Now),
 		instances: map[string]*instance{},
@@ -154,6 +160,21 @@ func (a *Agent) Run(ctx context.Context) error {
 			log.Printf("wake proxy: %v", err)
 		}
 	}()
+	if a.cfg.MetricsListen != "" {
+		ml, err := net.Listen("tcp", a.cfg.MetricsListen)
+		if err != nil {
+			return fmt.Errorf("metrics: %w", err)
+		}
+		mux := http.NewServeMux()
+		mux.Handle("GET /metrics", a.wakes.Handler())
+		srv := &http.Server{Handler: mux}
+		defer srv.Close()
+		go func() {
+			if err := srv.Serve(ml); !errors.Is(err, http.ErrServerClosed) {
+				log.Printf("metrics: %v", err)
+			}
+		}()
+	}
 	// The short backoff lets the agent find a restarted andend within the 4 s
 	// after which it would count the node as dead.
 	conn, err := grpc.NewClient("passthrough:///"+a.cfg.Control,
@@ -299,8 +320,10 @@ func (a *Agent) place(in *instance) {
 	}
 }
 
-// recordWake appends one event to wake_events.jsonl.
+// recordWake appends one event to wake_events.jsonl and puts it in the
+// histograms of /metrics.
 func (a *Agent) recordWake(ev wake.Event) error {
+	a.wakes.Observe(ev)
 	line, err := ev.Line()
 	if err != nil {
 		return err

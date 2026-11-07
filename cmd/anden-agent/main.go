@@ -35,6 +35,7 @@ func run(args []string, stderr io.Writer) int {
 	flags.StringVar(&cfg.Cgroup, "cgroup", "", "cgroup directory of the node, under /sys/fs/cgroup (required)")
 	flags.StringVar(&cfg.Subnet, "subnet", "", "subnet of the svc0 bridge (required)")
 	flags.StringVar(&cfg.Runtime, "runtime", "", "path of anden-runtime (required)")
+	flags.StringVar(&cfg.MetricsListen, "metrics-listen", "", "TCP address of /metrics; empty disables it")
 	cpuMillis := flags.Uint("cpu-millis", 0, "CPU the node offers, in thousandths of a core (required)")
 	memoryMiB := flags.Uint("memory-mib", 0, "memory the node offers, in MiB (required)")
 	if err := flags.Parse(args); err != nil {

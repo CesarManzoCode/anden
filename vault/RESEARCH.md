@@ -232,6 +232,18 @@ En todas las corridas, `criu` deja `rlimit: Can't setup RLIMIT_NOFILE for self: 
 
 En esta sesión no se ejecutó `tc qdisc replace` ni `tc qdisc del`: lo ejecutado en K0 fue `tc qdisc add ... netem delay` y alternar `link set down/up` (tabla de herramientas). No se comprobó qué mensaje da `tc qdisc del` sin un qdisc propio; `anden chaos heal` ignora su error.
 
+## Métricas y alertas (consultado el 7 nov 2026 para k5-01)
+
+| Fuente | Revisión | Dato usado |
+|---|---|---|
+| `go get github.com/prometheus/client_golang@v1.25.0` y `go mod tidy` | go1.27.3 | Trae `github.com/prometheus/common` v0.72.0 y `github.com/prometheus/client_model` v0.6.3 |
+| Código de `client_golang` v1.25.0 en la caché de módulos (`go doc`) | v1.25.0 | `prometheus.NewRegistry`, `NewHistogramVec` con `HistogramOpts.Buckets`, `NewGaugeVec`, `Registry.Gather`; `promhttp.HandlerFor(reg prometheus.Gatherer, opts HandlerOpts) http.Handler` |
+| Código de `common/expfmt` v0.72.0 en la caché de módulos | v0.72.0 | `NewTextParser(model.ValidationScheme) TextParser` (el valor cero ya no se usa para elegir esquema), `(*TextParser).TextToMetricFamilies(io.Reader)`, `MetricFamilyToText(io.Writer, *dto.MetricFamily)`, que escribe el bucket `+Inf` a partir del conteo si falta, y `FmtText` |
+| Go, `go doc sync.WaitGroup.Go` y `go doc builtin.new` | go1.27.3 | `(*WaitGroup).Go(func())`; `new` acepta una expresión y devuelve un puntero a su valor |
+| `promtool --version`, `promtool test rules --help` | 3.16.0 | Versión instalada en `/usr/bin/promtool`; `test rules <archivo>...` |
+
+No se ejecutó `promtool` sobre `ops/` ni sobre la salida de `/metrics` en esta sesión: lo hacen C23 y C24 al cerrar el K. La comparación exacta de `exp_annotations` y que `alertname` no haga falta en `exp_labels` viene de la página de pruebas de reglas, sin ejecutar.
+
 ## Documentación oficial sin revisión fija (consultada el 6 nov 2026)
 
 | Fuente | Dato |
