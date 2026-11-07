@@ -32,6 +32,7 @@ type fakeActions struct {
 	failed    atomic.Int32
 	haltGate  chan struct{}
 	startGate chan struct{}
+	recorded  chan *Phases
 }
 
 func (f *fakeActions) note(event string) {
@@ -69,9 +70,12 @@ func (f *fakeActions) Halt() error {
 	return f.haltErr
 }
 
-func (f *fakeActions) Start() error {
+func (f *fakeActions) Start(phases *Phases) error {
 	f.starts.Add(1)
 	f.note("start")
+	for _, ph := range []Phase{Placement, Rootfs, Network, Start} {
+		phases.Mark(ph)
+	}
 	if f.startGate != nil {
 		<-f.startGate
 	}
@@ -93,6 +97,12 @@ func (f *fakeActions) Probe() error {
 }
 
 func (f *fakeActions) Ready() { f.note("ready") }
+
+func (f *fakeActions) Record(phases *Phases) {
+	if f.recorded != nil {
+		f.recorded <- phases
+	}
+}
 
 func (f *fakeActions) Fail(error) {
 	f.failed.Add(1)
@@ -656,7 +666,7 @@ func TestBridgeCopiesBothWaysAndHalfCloses(t *testing.T) {
 	proxyBack, server := tcpPair(t)
 	done := make(chan struct{})
 	go func() {
-		bridge(proxyFront, proxyBack)
+		bridge(proxyFront, proxyBack, nil)
 		close(done)
 	}()
 
@@ -722,7 +732,7 @@ func TestHandleServesThroughTheMachine(t *testing.T) {
 	client, front := tcpPair(t)
 	handled := make(chan error, 1)
 	go func() {
-		handled <- p.handle(context.Background(), front, func(*net.TCPConn) (netip.AddrPort, error) { return target, nil })
+		handled <- p.handle(context.Background(), front, NewPhases(front.RemoteAddr().String()), func(*net.TCPConn) (netip.AddrPort, error) { return target, nil })
 	}()
 
 	if _, err := client.Write([]byte("hello")); err != nil {
@@ -748,7 +758,7 @@ func TestHandleServesThroughTheMachine(t *testing.T) {
 	}
 	client2, front2 := tcpPair(t)
 	defer client2.Close()
-	err = p.handle(context.Background(), front2, func(*net.TCPConn) (netip.AddrPort, error) { return target, nil })
+	err = p.handle(context.Background(), front2, NewPhases(front2.RemoteAddr().String()), func(*net.TCPConn) (netip.AddrPort, error) { return target, nil })
 	if err == nil {
 		t.Fatal("a connection to no service must fail")
 	}

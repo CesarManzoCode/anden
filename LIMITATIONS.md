@@ -83,8 +83,16 @@ Fuente única de lo que Andén no demuestra. Ningún otro archivo los repite.
 - Solo cae a `relaunch` lo que falla antes de que `criu restore` termine bien. Un proceso restaurado que muere después deja la instancia en `FAILED`, como un arranque fallido.
 - Dormida con snapshot, la instancia conserva sus namespaces de red, UTS e IPC y su veth en `svc0`, con su IP configurada. Sin snapshot los libera, como `relaunch`.
 - El snapshot vive en la memoria del agente: si el agente se reinicia, o el servicio se mueve de nodo, el siguiente despertar es por `relaunch`. Las imágenes quedan en `snapshots/` hasta el siguiente volcado o el fin de la instancia.
-- `route_requested` solo queda en el registro del agente hasta que se escriba `wake_events.jsonl`; la API solo da `route`.
-- `wake_events.jsonl` y el desglose por fases todavía no se escriben (K3).
+- La API solo da `route`; `route_requested` solo está en `wake_events.jsonl` y en el registro del agente.
+- El desglose por fases está escrito (k3-02) pero no medido: hasta que C12 corra, que las fases sumen lo que mide el cliente es hipótesis. Fuera de las fases quedan el saludo TCP antes del `accept` y lo que va del primer byte al último, que el cliente sí cuenta.
+- `placement` es solo la ida y vuelta de `SetAwake` al plano de control, con espera máxima de 200 ms. La respuesta no elige nodo todavía (D07, K4): con ella o sin ella, el despertar sigue en el mismo nodo. El latido manda después la misma intención otra vez, sin efecto.
+- En la ruta `restore`, `network` solo abre el netns y la cgroup que el sueño conservó; no crea nada.
+- Si la restauración falla y el despertar cae a `relaunch`, el tiempo de `criu restore` fallido se suma al `rootfs` del relanzamiento, porque cada fase cuenta desde la marca anterior.
+- Solo deja evento un despertar que llega a `ACTIVE`. Si falla, o si la conexión que lo provocó se cierra antes, no queda línea.
+- Un despertar sin conexión (`WakeService` o la orden del plano de control) deja su línea al llegar a `ACTIVE`, con `client_addr` vacío y `first_byte` en 0. Si la conexión que despertó al servicio termina sin recibir ningún byte, su línea sale al cerrar, también con `first_byte` en 0.
+- Las conexiones que llegan durante un despertar ya iniciado esperan con él, pero no dejan línea propia: el evento es de la conexión que lo inició.
+- `wake_events.jsonl` crece sin límite y se reabre en cada despertar. No se midió cuánto cuesta escribirlo; se escribe en otra gorrutina para no retrasar la respuesta.
+- `anden_wake_phase_seconds` y `anden_wake_duration_seconds` todavía no existen (K5).
 - El sueño conserva `upper/` y la cgroup. Tras un `relaunch` el servicio pierde su memoria, pero ve los archivos que escribió; `/.anden/stdio.log` sí empieza vacío en cada arranque.
 - Un socket en `TIME_WAIT` no aborta el sueño, aunque el prompt del sprint pide abortar con todo lo que no sea `LISTEN`. Un `TIME_WAIT` no tiene proceso ni datos, y dura 60 s en el servicio que cerró primero, de modo que lo dejaría sin dormir ese tiempo. Cualquier otro estado sí aborta.
 - `SleepService` sobre un servicio con una conexión viva no la corta: queda en `SLEEPING` y lo reintenta cada segundo hasta que la conexión termine.

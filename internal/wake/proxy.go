@@ -18,6 +18,8 @@ import (
 const (
 	soOriginalDst = 80
 	sockaddrInLen = 16
+	// firstReadSize is the buffer of the first read of an answer.
+	firstReadSize = 32 << 10
 )
 
 // Proxy accepts what the rules redirect to :15000, holds each connection until
@@ -79,15 +81,19 @@ func (p *Proxy) Serve(ctx context.Context, ln *net.TCPListener) error {
 			}
 			return err
 		}
+		phases := NewPhases(conn.RemoteAddr().String())
 		go func() {
-			if err := p.handle(ctx, conn, originalDst); err != nil && ctx.Err() == nil {
+			if err := p.handle(ctx, conn, phases, originalDst); err != nil && ctx.Err() == nil {
 				log.Printf("wake: %s: %v", conn.RemoteAddr(), err)
 			}
 		}()
 	}
 }
 
-func (p *Proxy) handle(ctx context.Context, client *net.TCPConn, dst func(*net.TCPConn) (netip.AddrPort, error)) error {
+// handle serves one connection, accepted when phases began. If it woke the
+// service, its wake is recorded once the first byte of the service reaches it,
+// or when it ends without one.
+func (p *Proxy) handle(ctx context.Context, client *net.TCPConn, phases *Phases, dst func(*net.TCPConn) (netip.AddrPort, error)) error {
 	defer client.Close()
 	target, err := dst(client)
 	if err != nil {
@@ -97,17 +103,29 @@ func (p *Proxy) handle(ctx context.Context, client *net.TCPConn, dst func(*net.T
 	if m == nil {
 		return fmt.Errorf("no service at %s", target)
 	}
-	release, err := m.Serve(ctx.Done())
+	release, owner, err := m.ServeWake(ctx.Done(), phases)
 	if err != nil {
 		return fmt.Errorf("%s: %w", target, err)
 	}
 	defer release()
+	var first func()
+	if owner {
+		var once sync.Once
+		// On its own goroutine: writing the event must not delay the rest of
+		// the answer, which the client is still timing.
+		record := func() { once.Do(func() { go m.act.Record(phases) }) }
+		defer record()
+		first = func() {
+			phases.Mark(FirstByte)
+			record()
+		}
+	}
 	server, err := p.dial(ctx, target)
 	if err != nil {
 		return err
 	}
 	defer server.Close()
-	bridge(client, server)
+	bridge(client, server, first)
 	return nil
 }
 
@@ -130,23 +148,48 @@ func Dial(ctx context.Context, target netip.AddrPort) (*net.TCPConn, error) {
 }
 
 // bridge copies bytes both ways until both are finished. An end of file travels
-// on as a half close; an error ends both directions at once.
-func bridge(a, b *net.TCPConn) {
+// on as a half close; an error ends both directions at once. first, if not nil,
+// is called once the first bytes from b have been written to a.
+func bridge(a, b *net.TCPConn, first func()) {
 	errs := make(chan error, 2)
-	half := func(dst, src *net.TCPConn) {
-		_, err := io.Copy(dst, src)
+	half := func(dst, src *net.TCPConn, first func()) {
+		var err error
+		if first != nil {
+			err = copyFirst(dst, src, first)
+		}
+		if err == nil {
+			_, err = io.Copy(dst, src)
+		}
 		if err == nil {
 			err = dst.CloseWrite()
 		}
 		errs <- err
 	}
-	go half(a, b)
-	go half(b, a)
+	go half(a, b, first)
+	go half(b, a, nil)
 	if err := <-errs; err != nil {
 		a.Close()
 		b.Close()
 	}
 	<-errs
+}
+
+// copyFirst copies one read from src to dst and then calls first. io.Copy
+// takes the rest, with splice. An end of file before any byte is left for
+// io.Copy to find again.
+func copyFirst(dst, src *net.TCPConn, first func()) error {
+	buf := make([]byte, firstReadSize)
+	n, err := src.Read(buf)
+	if n > 0 {
+		if _, werr := dst.Write(buf[:n]); werr != nil {
+			return werr
+		}
+		first()
+	}
+	if err == io.EOF {
+		return nil
+	}
+	return err
 }
 
 // originalDst reads where a redirected connection was going: getsockopt(SOL_IP,

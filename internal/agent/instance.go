@@ -137,7 +137,7 @@ func (a *Agent) newInstance(ctx context.Context, as *andenv1.Assignment, asleep 
 // What it created stays for stop to remove.
 func (a *Agent) start(in *instance, as *andenv1.Assignment) {
 	defer close(in.started)
-	err := a.launch(in, as)
+	err := a.launch(in, as, nil)
 	if err == nil {
 		err = a.awaitReady(in, as.GetSpec())
 	}
@@ -210,16 +210,18 @@ func (c *instanceControl) Halt() error {
 }
 
 // Start wakes the instance by restore from its snapshot or by relaunch, where its
-// rootfs and network are made anew. The control plane learns of it afterwards,
-// so a wake does not wait for it.
-func (c *instanceControl) Start() error {
+// rootfs and network are made anew. It first asks the control plane for the
+// wake, waiting for its answer at most placementTimeout (see place).
+func (c *instanceControl) Start(phases *wake.Phases) error {
 	in := c.in
 	c.a.setState(in, andenv1.InstanceState_INSTANCE_STATE_STARTING)
 	c.a.declare(in, true)
+	c.a.place(in)
+	phases.Mark(wake.Placement)
 	snapshot := in.hasSnapshot
 	in.hasSnapshot = false
 	route, err := wakeBy(in.routeRequested, snapshot, func() error {
-		err := c.a.restore(in)
+		err := c.a.restore(in, phases)
 		if err != nil {
 			log.Printf("instance %s: restore failed, relaunching: %v", in.id, err)
 		}
@@ -228,7 +230,7 @@ func (c *instanceControl) Start() error {
 		if in.routeRequested == routeRestore {
 			c.a.discardRestore(in)
 		}
-		return c.a.launch(in, in.assignment)
+		return c.a.launch(in, in.assignment, phases)
 	})
 	c.a.mu.Lock()
 	in.route = route
@@ -267,6 +269,16 @@ func (c *instanceControl) Probe() error {
 		return err
 	}
 	return conn.Close()
+}
+
+// Record appends the breakdown of a wake to wake_events.jsonl.
+func (c *instanceControl) Record(phases *wake.Phases) {
+	c.a.mu.Lock()
+	route := c.in.route
+	c.a.mu.Unlock()
+	if err := c.a.recordWake(phases.Event(c.in.service, route, c.in.routeRequested)); err != nil {
+		log.Printf("instance %s: %s: %v", c.in.id, wakeEventsFile, err)
+	}
 }
 
 func (c *instanceControl) Ready() {
@@ -347,8 +359,8 @@ func writeUnpolled(path string, data []byte) error {
 }
 
 // launch prepares the rootfs, cgroup and network and has the runtime start the
-// process.
-func (a *Agent) launch(in *instance, as *andenv1.Assignment) error {
+// process, marking each part on phases when it is a wake.
+func (a *Agent) launch(in *instance, as *andenv1.Assignment, phases *wake.Phases) error {
 	p, spec := in.paths, as.GetSpec()
 	for _, d := range []string{p.upper, p.work, p.merged, p.bundle} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
@@ -364,12 +376,14 @@ func (a *Agent) launch(in *instance, as *andenv1.Assignment) error {
 		return err
 	}
 	defer stdio.Close()
+	phases.Mark(wake.Rootfs)
 	if err := setupCgroup(p.cgroup); err != nil {
 		return err
 	}
 	if err := a.setupNetwork(in); err != nil {
 		return fmt.Errorf("network: %w", err)
 	}
+	phases.Mark(wake.Network)
 	volumes := filepath.Join(a.cfg.State, "volumes")
 	for _, v := range spec.GetVolumes() {
 		if err := os.MkdirAll(filepath.Join(volumes, v.GetName()), 0o755); err != nil {
@@ -400,6 +414,7 @@ func (a *Agent) launch(in *instance, as *andenv1.Assignment) error {
 	if out, err := exec.Command(a.cfg.Runtime, a.runtimeArgs("start", in.id)...).CombinedOutput(); err != nil {
 		return fmt.Errorf("anden-runtime start: %w: %s", err, out)
 	}
+	phases.Mark(wake.Start)
 	return nil
 }
 

@@ -389,3 +389,44 @@ func TestReclaimAsksForAllTheMemory(t *testing.T) {
 		t.Fatalf("memory.reclaim = %q", got)
 	}
 }
+
+func TestRecordWakeAppendsOneLinePerWake(t *testing.T) {
+	a := &Agent{cfg: Config{State: t.TempDir()}}
+	in := &instance{id: "echo-1", service: "echo", route: routeRestore, routeRequested: routeRestore}
+	control := &instanceControl{a: a, in: in}
+	for _, client := range []string{"10.80.0.100:40112", "10.80.0.100:40113"} {
+		phases := wake.NewPhases(client)
+		for _, ph := range []wake.Phase{wake.Detection, wake.Placement, wake.Rootfs, wake.Network, wake.Start, wake.Readiness, wake.FirstByte} {
+			phases.Mark(ph)
+		}
+		control.Record(phases)
+	}
+	raw, err := os.ReadFile(filepath.Join(a.cfg.State, wakeEventsFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSuffix(string(raw), "\n"), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("%d lines: %q", len(lines), raw)
+	}
+	for i, line := range lines {
+		var ev map[string]any
+		if err := json.Unmarshal([]byte(line), &ev); err != nil {
+			t.Fatal(err)
+		}
+		if ev["service"] != "echo" || ev["route"] != routeRestore || ev["route_requested"] != routeRestore ||
+			ev["client_addr"] != "10.80.0.100:4011"+strconv.Itoa(2+i) {
+			t.Fatalf("line %d: %s", i, line)
+		}
+		phases, _ := ev["phases_ms"].(map[string]any)
+		keys := make([]string, 0, len(phases))
+		for k := range phases {
+			keys = append(keys, k)
+		}
+		slices.Sort(keys)
+		want := []string{"detection", "first_byte", "network", "placement", "readiness", "rootfs", "start"}
+		if !reflect.DeepEqual(keys, want) {
+			t.Fatalf("phases_ms keys %v, want %v", keys, want)
+		}
+	}
+}

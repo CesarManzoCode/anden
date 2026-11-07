@@ -38,6 +38,12 @@ const (
 	// sleepRetry is how long to wait after a sleep aborted by a live socket
 	// before an order to sleep tries again.
 	sleepRetry = time.Second
+	// placementTimeout is how long a wake waits for the control plane before
+	// it goes on with this node.
+	placementTimeout = 200 * time.Millisecond
+	// wakeEventsFile, in the state of the node, has one line per wake
+	// (contract, section 5).
+	wakeEventsFile = "wake_events.jsonl"
 )
 
 // Config is the command line of the agent.
@@ -67,8 +73,14 @@ type Agent struct {
 	// imageMu serializes transfers and overlay mounts, because a mount extracts
 	// the layers it lacks: two instances of one image would extract them twice.
 	imageMu sync.Mutex
+	// eventsMu keeps the lines of wake_events.jsonl whole.
+	eventsMu sync.Mutex
 
-	mu        sync.Mutex
+	mu sync.Mutex
+	// control and epoch are the registration, for what does not wait for a
+	// heartbeat: epoch is 0 while there is none.
+	control   andenv1.AgentControlClient
+	epoch     uint64
 	desired   []*andenv1.Assignment
 	instances map[string]*instance
 	// intents are what this node decided and the control plane does not know
@@ -145,6 +157,9 @@ func (a *Agent) Run(ctx context.Context) error {
 	go a.reconcileLoop(ctx)
 
 	s := &session{client: andenv1.NewAgentControlClient(conn)}
+	a.mu.Lock()
+	a.control = s.client
+	a.mu.Unlock()
 	tick := time.NewTicker(defaultHeartbeat)
 	defer tick.Stop()
 	for {
@@ -189,6 +204,7 @@ func (a *Agent) beat(ctx context.Context, s *session) error {
 		s.interval = time.Duration(resp.GetHeartbeatIntervalMs()) * time.Millisecond
 		a.mu.Lock()
 		a.blobsURL = resp.GetBlobsUrl()
+		a.epoch = s.epoch
 		a.mu.Unlock()
 		log.Printf("registered as %s, epoch %d", a.cfg.Node, s.epoch)
 	}
@@ -228,6 +244,50 @@ func (a *Agent) refused(s *session, err error) error {
 	switch status.Code(err) {
 	case codes.FailedPrecondition, codes.NotFound:
 		s.epoch = 0
+		a.mu.Lock()
+		a.epoch = 0
+		a.mu.Unlock()
+	}
+	return err
+}
+
+// place is the placement of a wake: it tells the control plane that the
+// instance wakes and waits for its answer at most placementTimeout. With an
+// answer or without one the wake stays on this node, because the answer does
+// not choose a node yet (D07, K4). The intent from declare stays as well; the
+// control plane takes the same intent twice without change.
+func (a *Agent) place(in *instance) {
+	a.mu.Lock()
+	client, epoch := a.control, a.epoch
+	a.mu.Unlock()
+	if client == nil || epoch == 0 {
+		log.Printf("instance %s: placement: not registered, waking on this node", in.id)
+		return
+	}
+	ctx, cancel := context.WithTimeout(in.ctx, placementTimeout)
+	defer cancel()
+	_, err := client.SetAwake(ctx, &andenv1.SetAwakeRequest{Node: a.cfg.Node, Epoch: epoch, Service: in.service,
+		Generation: in.generation, Awake: true})
+	if err != nil {
+		log.Printf("instance %s: placement: no answer, waking on this node: %v", in.id, err)
+	}
+}
+
+// recordWake appends one event to wake_events.jsonl.
+func (a *Agent) recordWake(ev wake.Event) error {
+	line, err := ev.Line()
+	if err != nil {
+		return err
+	}
+	a.eventsMu.Lock()
+	defer a.eventsMu.Unlock()
+	f, err := os.OpenFile(filepath.Join(a.cfg.State, wakeEventsFile), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return err
+	}
+	_, err = f.Write(line)
+	if cerr := f.Close(); err == nil {
+		err = cerr
 	}
 	return err
 }

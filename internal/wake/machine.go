@@ -74,14 +74,19 @@ type Actions interface {
 	// Halt ends the processes and frees what they occupied. Once it is called
 	// the sleep is decided.
 	Halt() error
-	// Start brings the processes back.
-	Start() error
+	// Start brings the processes back, marking on phases the placement, rootfs,
+	// network and start of the wake.
+	Start(phases *Phases) error
 	// Probe makes one attempt to connect to the service.
 	Probe() error
 	// Ready is called when the service answers and is out of the set.
 	Ready()
 	// Fail is called when the machine gives up on the service.
 	Fail(err error)
+	// Record keeps the breakdown of a wake that ended: once per wake, after
+	// the first byte of its connection or, if no connection woke the service,
+	// as soon as it is Active.
+	Record(phases *Phases)
 }
 
 // Machine is the state of one service. Every path to sleep or to wake goes
@@ -100,6 +105,10 @@ type Machine struct {
 	held bool
 	// pending is a wake asked for during Sleeping.
 	pending bool
+	// phases is the breakdown of the next wake, while it is pending or about to
+	// begin; owned says a connection will record it after its first byte.
+	phases *Phases
+	owned  bool
 	// conns counts connections the proxy is serving. A connection still dialing
 	// has no socket in the service yet, so reading its sockets would miss it.
 	conns int
@@ -201,6 +210,7 @@ func (m *Machine) abort() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.pending = false
+	m.phases, m.owned = nil, false
 	m.setLocked(Active)
 }
 
@@ -232,6 +242,7 @@ func (m *Machine) settle() {
 		m.beginWakeLocked()
 		return
 	}
+	m.phases, m.owned = nil, false
 	m.setLocked(Asleep)
 }
 
@@ -240,27 +251,48 @@ func (m *Machine) settle() {
 func (m *Machine) Wake() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.wakeLocked()
+	m.wakeLocked(nil)
 }
 
-func (m *Machine) wakeLocked() {
+// wakeLocked asks for a wake on behalf of the connection whose breakdown is
+// phases, or of nobody with nil. Only the first connection to ask owns it.
+func (m *Machine) wakeLocked(phases *Phases) {
 	switch m.state {
 	case Asleep:
+		m.claimLocked(phases)
 		m.beginWakeLocked()
 	case Sleeping:
 		m.pending = true
+		m.claimLocked(phases)
+	}
+}
+
+// claimLocked gives the next wake its breakdown, if it has none yet.
+func (m *Machine) claimLocked(phases *Phases) {
+	if m.phases == nil && phases != nil {
+		m.phases, m.owned = phases, true
 	}
 }
 
 func (m *Machine) beginWakeLocked() {
+	phases, owned := m.phases, m.owned
+	m.phases, m.owned = nil, false
+	if phases == nil {
+		phases = NewPhases("")
+	}
+	if owned {
+		phases.setWoke()
+	}
+	phases.Mark(Detection)
 	m.setLocked(Waking)
-	go m.runWake()
+	go m.runWake(phases, owned)
 }
 
 // runWake starts the service, waits until it accepts connections and only then
 // takes the target out of the set, so new connections never find it closed.
-func (m *Machine) runWake() {
-	err := m.act.Start()
+// A wake that no connection owns is recorded here, without a first byte.
+func (m *Machine) runWake(phases *Phases, owned bool) {
+	err := m.act.Start(phases)
 	if err == nil {
 		err = m.awaitListening()
 	}
@@ -273,9 +305,13 @@ func (m *Machine) runWake() {
 	}
 	m.act.Ready()
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	m.held = false
+	phases.Mark(Readiness)
 	m.setLocked(Active)
+	m.mu.Unlock()
+	if !owned {
+		m.act.Record(phases)
+	}
 }
 
 // awaitListening polls the service until it answers or the time is up.
@@ -304,30 +340,39 @@ func (m *Machine) fail(err error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.pending = false
+	m.phases, m.owned = nil, false
 	m.setLocked(Failed)
 }
 
 // Serve holds a connection until the service is Active, waking it if needed.
 // The caller may then connect, and calls the returned function when it is done.
 func (m *Machine) Serve(done <-chan struct{}) (func(), error) {
+	release, _, err := m.ServeWake(done, nil)
+	return release, err
+}
+
+// ServeWake is Serve for a connection with its breakdown. It also reports
+// whether the connection owns the wake it waited for: then the caller marks its
+// first byte and records it.
+func (m *Machine) ServeWake(done <-chan struct{}, phases *Phases) (func(), bool, error) {
 	for {
 		m.mu.Lock()
 		switch m.state {
 		case Active:
 			m.conns++
 			m.mu.Unlock()
-			return m.releaseConn, nil
+			return m.releaseConn, phases.Woke(), nil
 		case Failed, Closed:
 			m.mu.Unlock()
-			return nil, ErrUnavailable
+			return nil, false, ErrUnavailable
 		}
-		m.wakeLocked()
+		m.wakeLocked(phases)
 		changed := m.changed
 		m.mu.Unlock()
 		select {
 		case <-changed:
 		case <-done:
-			return nil, ErrUnavailable
+			return nil, false, ErrUnavailable
 		}
 	}
 }

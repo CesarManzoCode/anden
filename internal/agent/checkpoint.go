@@ -15,6 +15,7 @@ import (
 	"syscall"
 
 	andenv1 "github.com/CesarManzoCode/anden/gen/anden/v1"
+	"github.com/CesarManzoCode/anden/internal/wake"
 )
 
 // The restore route of D03. The recipe was found by trial without root, and each
@@ -233,12 +234,14 @@ func (a *Agent) dump(in *instance) error {
 
 // restore brings the instance back from its snapshot: the overlay is mounted
 // again, and criu runs inside the cgroup of the instance and its kept UTS and
-// IPC, with the kept netns as external.
-func (a *Agent) restore(in *instance) error {
+// IPC, with the kept netns as external. The network phase is only opening what
+// the sleep kept.
+func (a *Agent) restore(in *instance, phases *wake.Phases) error {
 	p := in.paths
 	if _, err := a.mountImage(in.ctx, in.assignment.GetSpec().GetImageDigest(), p); err != nil {
 		return fmt.Errorf("image: %w", err)
 	}
+	phases.Mark(wake.Rootfs)
 	netns, err := os.Open(p.netNS)
 	if err != nil {
 		return err
@@ -249,6 +252,7 @@ func (a *Agent) restore(in *instance) error {
 		return err
 	}
 	defer cgroup.Close()
+	phases.Mark(wake.Network)
 	criu, err := exec.LookPath("criu")
 	if err != nil {
 		return err
@@ -271,6 +275,7 @@ func (a *Agent) restore(in *instance) error {
 		return fmt.Errorf("%s: %w", pidfile, err)
 	}
 	in.pid = pid
+	phases.Mark(wake.Start)
 	return nil
 }
 

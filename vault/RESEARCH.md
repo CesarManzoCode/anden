@@ -175,6 +175,16 @@ Lo no medido aquí: la cifra de 2 ms de sondeo es el intervalo pedido por D04, n
 
 No se ejecutó nada de la ruta dentro del agente en esta sesión.
 
+## Desglose por fases (consultado el 6 nov 2026 para k3-02)
+
+| Fuente | Revisión | Dato usado |
+|---|---|---|
+| `time.get_clock_info('monotonic')`, ejecutado | Python 3 del sistema | `implementation='clock_gettime(CLOCK_MONOTONIC)'`, resolución 1e-09: `time.monotonic_ns` lee el mismo reloj que el agente escribe en `t_accept_ns` |
+| `/usr/include/linux/time.h` | cabeceras instaladas | `CLOCK_MONOTONIC` vale 1 |
+| Go, `src/syscall/zsysnum_linux_amd64.go` y `go doc syscall.Timespec.Nano` | go1.27.3 | `SYS_CLOCK_GETTIME = 228`; `(*Timespec).Nano() int64`. `time.Now` guarda una lectura monótona pero no expone su valor |
+
+Que los netns del datacenter compartan ese reloj con el host se razonó (no se crea namespace de tiempo), no se midió.
+
 ## Documentación oficial sin revisión fija (consultada el 6 nov 2026)
 
 | Fuente | Dato |
