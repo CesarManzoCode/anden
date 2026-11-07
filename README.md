@@ -15,7 +15,7 @@ Cada resultado se mide con un cliente externo y contra una comparación externa,
 | K2 | Datacenter, API y despertar por relanzamiento | Cerrada |
 | K3 | Restauración, desglose por fases, descubrimiento y comparación | Cerrada |
 | K4 | Colocación, rollouts, caída y partición | Cerrada |
-| K5 | Observabilidad, densidad y construcción | Pendiente |
+| K5 | Observabilidad, densidad y construcción | Cerrada |
 | K6 | Diseño y publicación de resultados | Pendiente |
 
 ## Resultados
@@ -48,8 +48,14 @@ Medido el 6 y 7 nov 2026 en esta máquina (kernel 7.2.14, Ryzen 5 5600G). Los l�
 | C17 | vegeta a 200 peticiones/s durante 30 s; v3 con healthcheck que falla | 6000 peticiones, 0 errores. v3 arrancó y recibió 0 peticiones; v2 sigue activa para la API y en 20 de 20 muestras del borde |
 | C18 | Sonda externa cada 100 ms tras `anden chaos kill` | Los dos servicios de node1 vuelven en node2 con 4.70 s sin servicio cada uno, frente al límite de 10 s |
 | C19 | Latidos del singleton en los tres nodos durante una partición de 7.02 s | 2 escritores en 258 latidos, sin solape: el primero deja de escribir 1.91 s después de la partición y el segundo empieza 4.55 s después, con 2.645 s sin escritor |
+| C23 | `promtool check metrics` sobre `10.80.0.1:9090/metrics` | Sale con 0. Están las 7 fases de `anden_wake_phase_seconds` en `relaunch` y `restore`, `anden_wake_duration_seconds` de ambas rutas y `anden_node_up` en 1 para los 3 nodos |
+| C24 | `promtool check rules` y `promtool test rules` | Ambos salen con 0 sobre `ops/alerts.yml`, con casos que disparan y casos sanos |
+| C25 | Runbooks en `ops/runbooks/` y el uso de `bin/anden` | `AndenNodeDown` y `AndenWakeOverBudget` tienen su runbook, con sus encabezados y solo comandos que existen |
+| C26 | `memory.current` del scope y `wakeclient`, 50 despertares por escalón | `echosvc` de 50 milicores y 32 MiB por `relaunch`, 0 errores. Dormidos / p99 de despertar / memoria por dormido: 10 / 251.8 ms / 4012.4 KiB, 50 / 317.9 ms / 1072.2 KiB, 100 / 249.5 ms / 639.6 KiB, 250 / 299.5 ms / 332.4 KiB, 500 / 335.2 ms / 203.5 KiB y 1000 / 243.6 ms / 136.5 KiB. El scope pasa de 127 275 008 bytes sin servicios a 267 067 392 con 1000 dormidos |
+| C28 | `make check && make accept` en un clon limpio, sin sudo | Sale con 0 en 2346.8 s. C8 fría sale con 77 por falta de `sudo -n` |
+| C29 | cloc sobre las rutas de `acceptance/loc_paths.txt` | Producto 9347 líneas, apoyo 5095: razón 0.545, frente a la referencia de 0.15 del método |
 
-De K5 en adelante todavía no hay mediciones.
+De K6 en adelante todavía no hay mediciones.
 
 ## Uso
 
