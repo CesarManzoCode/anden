@@ -224,6 +224,11 @@ func (a *andenService) SleepService(ctx context.Context, req *andenv1.SleepServi
 func (a *andenService) WakeService(ctx context.Context, req *andenv1.WakeServiceRequest) (*andenv1.Service, error) {
 	svc, err := a.cp.store.UpdateDesired(ctx, req.GetName(), func(s *store.Service) error {
 		s.DesiredAwake = true
+		// The instance of a failed generation stays for inspection; only a
+		// new generation replaces it.
+		if s.State == stateFailed {
+			s.Generation++
+		}
 		switch s.State {
 		case stateSleeping, stateAsleep, stateFailed:
 			s.State = stateWaking
@@ -243,8 +248,8 @@ func (a *andenService) DeleteService(ctx context.Context, req *andenv1.DeleteSer
 	return a.reply(ctx, svc, err)
 }
 
-// DeployService stores a new spec as the next version. On a sleeping service
-// it only changes the desired version (D24).
+// DeployService stores a new spec as the next version, in a new generation. On
+// a sleeping service it only changes the desired version (D24).
 func (a *andenService) DeployService(ctx context.Context, req *andenv1.DeployServiceRequest) (*andenv1.Service, error) {
 	spec, err := normalizeSpec(req.GetSpec())
 	if err != nil {
@@ -257,11 +262,14 @@ func (a *andenService) DeployService(ctx context.Context, req *andenv1.DeploySer
 	svc, err := a.cp.store.UpdateDesired(ctx, spec.Name, func(s *store.Service) error {
 		s.Spec = raw
 		s.Version++
+		s.Generation++
 		return nil
 	})
 	return a.reply(ctx, svc, err)
 }
 
+// MoveService places the service on another node, in a new generation and with
+// an address of that node's subnet, which the next reconciler pass assigns.
 func (a *andenService) MoveService(ctx context.Context, req *andenv1.MoveServiceRequest) (*andenv1.Service, error) {
 	nodes, err := a.cp.store.ListNodes(ctx)
 	if err != nil {
@@ -275,7 +283,10 @@ func (a *andenService) MoveService(ctx context.Context, req *andenv1.MoveService
 		return nil, status.Errorf(codes.NotFound, "node %q is not registered", req.GetNode())
 	}
 	svc, err := a.cp.store.UpdateDesired(ctx, req.GetName(), func(s *store.Service) error {
-		s.DesiredNode = req.GetNode()
+		if s.DesiredNode != req.GetNode() {
+			s.DesiredNode, s.DesiredAddr = req.GetNode(), ""
+			s.Generation++
+		}
 		return nil
 	})
 	return a.reply(ctx, svc, err)

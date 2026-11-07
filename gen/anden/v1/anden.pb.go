@@ -1306,11 +1306,13 @@ func (x *ListNodesResponse) GetNodes() []*Node {
 }
 
 type RegisterRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Node          string                 `protobuf:"bytes,1,opt,name=node,proto3" json:"node,omitempty"`
-	Addr          string                 `protobuf:"bytes,2,opt,name=addr,proto3" json:"addr,omitempty"`
-	CpuMillis     uint32                 `protobuf:"varint,3,opt,name=cpu_millis,json=cpuMillis,proto3" json:"cpu_millis,omitempty"`
-	MemoryMib     uint32                 `protobuf:"varint,4,opt,name=memory_mib,json=memoryMib,proto3" json:"memory_mib,omitempty"`
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	Node      string                 `protobuf:"bytes,1,opt,name=node,proto3" json:"node,omitempty"`
+	Addr      string                 `protobuf:"bytes,2,opt,name=addr,proto3" json:"addr,omitempty"`
+	CpuMillis uint32                 `protobuf:"varint,3,opt,name=cpu_millis,json=cpuMillis,proto3" json:"cpu_millis,omitempty"`
+	MemoryMib uint32                 `protobuf:"varint,4,opt,name=memory_mib,json=memoryMib,proto3" json:"memory_mib,omitempty"`
+	// Subnet of the node's svc0 bridge, from which instance addresses come.
+	Subnet        string `protobuf:"bytes,5,opt,name=subnet,proto3" json:"subnet,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1373,13 +1375,22 @@ func (x *RegisterRequest) GetMemoryMib() uint32 {
 	return 0
 }
 
+func (x *RegisterRequest) GetSubnet() string {
+	if x != nil {
+		return x.Subnet
+	}
+	return ""
+}
+
 type RegisterResponse struct {
 	state               protoimpl.MessageState `protogen:"open.v1"`
 	Epoch               uint64                 `protobuf:"varint,1,opt,name=epoch,proto3" json:"epoch,omitempty"`
 	LeaseTtlMs          uint32                 `protobuf:"varint,2,opt,name=lease_ttl_ms,json=leaseTtlMs,proto3" json:"lease_ttl_ms,omitempty"`
 	HeartbeatIntervalMs uint32                 `protobuf:"varint,3,opt,name=heartbeat_interval_ms,json=heartbeatIntervalMs,proto3" json:"heartbeat_interval_ms,omitempty"`
-	unknownFields       protoimpl.UnknownFields
-	sizeCache           protoimpl.SizeCache
+	// Base URL of the blob server: GET <blobs_url>/blobs/sha256/<hex>.
+	BlobsUrl      string `protobuf:"bytes,4,opt,name=blobs_url,json=blobsUrl,proto3" json:"blobs_url,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *RegisterResponse) Reset() {
@@ -1431,6 +1442,13 @@ func (x *RegisterResponse) GetHeartbeatIntervalMs() uint32 {
 		return x.HeartbeatIntervalMs
 	}
 	return 0
+}
+
+func (x *RegisterResponse) GetBlobsUrl() string {
+	if x != nil {
+		return x.BlobsUrl
+	}
+	return ""
 }
 
 type HeartbeatRequest struct {
@@ -1485,16 +1503,104 @@ func (x *HeartbeatRequest) GetEpoch() uint64 {
 	return 0
 }
 
-type HeartbeatResponse struct {
+// Assignment is one service placed on the node. An instance with instance_id
+// runs when awake is set; any other instance of the node stops.
+type Assignment struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	LeaseTtlMs    uint32                 `protobuf:"varint,1,opt,name=lease_ttl_ms,json=leaseTtlMs,proto3" json:"lease_ttl_ms,omitempty"`
+	InstanceId    string                 `protobuf:"bytes,1,opt,name=instance_id,json=instanceId,proto3" json:"instance_id,omitempty"`
+	Spec          *ServiceSpec           `protobuf:"bytes,2,opt,name=spec,proto3" json:"spec,omitempty"`
+	Version       uint64                 `protobuf:"varint,3,opt,name=version,proto3" json:"version,omitempty"`
+	Generation    uint64                 `protobuf:"varint,4,opt,name=generation,proto3" json:"generation,omitempty"`
+	Addr          string                 `protobuf:"bytes,5,opt,name=addr,proto3" json:"addr,omitempty"`
+	Awake         bool                   `protobuf:"varint,6,opt,name=awake,proto3" json:"awake,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Assignment) Reset() {
+	*x = Assignment{}
+	mi := &file_anden_v1_anden_proto_msgTypes[20]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Assignment) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Assignment) ProtoMessage() {}
+
+func (x *Assignment) ProtoReflect() protoreflect.Message {
+	mi := &file_anden_v1_anden_proto_msgTypes[20]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Assignment.ProtoReflect.Descriptor instead.
+func (*Assignment) Descriptor() ([]byte, []int) {
+	return file_anden_v1_anden_proto_rawDescGZIP(), []int{20}
+}
+
+func (x *Assignment) GetInstanceId() string {
+	if x != nil {
+		return x.InstanceId
+	}
+	return ""
+}
+
+func (x *Assignment) GetSpec() *ServiceSpec {
+	if x != nil {
+		return x.Spec
+	}
+	return nil
+}
+
+func (x *Assignment) GetVersion() uint64 {
+	if x != nil {
+		return x.Version
+	}
+	return 0
+}
+
+func (x *Assignment) GetGeneration() uint64 {
+	if x != nil {
+		return x.Generation
+	}
+	return 0
+}
+
+func (x *Assignment) GetAddr() string {
+	if x != nil {
+		return x.Addr
+	}
+	return ""
+}
+
+func (x *Assignment) GetAwake() bool {
+	if x != nil {
+		return x.Awake
+	}
+	return false
+}
+
+type HeartbeatResponse struct {
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	LeaseTtlMs uint32                 `protobuf:"varint,1,opt,name=lease_ttl_ms,json=leaseTtlMs,proto3" json:"lease_ttl_ms,omitempty"`
+	// Everything the control plane wants on the node, in full on every beat.
+	Assignments   []*Assignment `protobuf:"bytes,2,rep,name=assignments,proto3" json:"assignments,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *HeartbeatResponse) Reset() {
 	*x = HeartbeatResponse{}
-	mi := &file_anden_v1_anden_proto_msgTypes[20]
+	mi := &file_anden_v1_anden_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1506,7 +1612,7 @@ func (x *HeartbeatResponse) String() string {
 func (*HeartbeatResponse) ProtoMessage() {}
 
 func (x *HeartbeatResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_anden_v1_anden_proto_msgTypes[20]
+	mi := &file_anden_v1_anden_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1519,7 +1625,7 @@ func (x *HeartbeatResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HeartbeatResponse.ProtoReflect.Descriptor instead.
 func (*HeartbeatResponse) Descriptor() ([]byte, []int) {
-	return file_anden_v1_anden_proto_rawDescGZIP(), []int{20}
+	return file_anden_v1_anden_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *HeartbeatResponse) GetLeaseTtlMs() uint32 {
@@ -1527,6 +1633,13 @@ func (x *HeartbeatResponse) GetLeaseTtlMs() uint32 {
 		return x.LeaseTtlMs
 	}
 	return 0
+}
+
+func (x *HeartbeatResponse) GetAssignments() []*Assignment {
+	if x != nil {
+		return x.Assignments
+	}
+	return nil
 }
 
 type InstanceReport struct {
@@ -1545,7 +1658,7 @@ type InstanceReport struct {
 
 func (x *InstanceReport) Reset() {
 	*x = InstanceReport{}
-	mi := &file_anden_v1_anden_proto_msgTypes[21]
+	mi := &file_anden_v1_anden_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1557,7 +1670,7 @@ func (x *InstanceReport) String() string {
 func (*InstanceReport) ProtoMessage() {}
 
 func (x *InstanceReport) ProtoReflect() protoreflect.Message {
-	mi := &file_anden_v1_anden_proto_msgTypes[21]
+	mi := &file_anden_v1_anden_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1570,7 +1683,7 @@ func (x *InstanceReport) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InstanceReport.ProtoReflect.Descriptor instead.
 func (*InstanceReport) Descriptor() ([]byte, []int) {
-	return file_anden_v1_anden_proto_rawDescGZIP(), []int{21}
+	return file_anden_v1_anden_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *InstanceReport) GetId() string {
@@ -1641,7 +1754,7 @@ type ReportInstancesRequest struct {
 
 func (x *ReportInstancesRequest) Reset() {
 	*x = ReportInstancesRequest{}
-	mi := &file_anden_v1_anden_proto_msgTypes[22]
+	mi := &file_anden_v1_anden_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1653,7 +1766,7 @@ func (x *ReportInstancesRequest) String() string {
 func (*ReportInstancesRequest) ProtoMessage() {}
 
 func (x *ReportInstancesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_anden_v1_anden_proto_msgTypes[22]
+	mi := &file_anden_v1_anden_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1666,7 +1779,7 @@ func (x *ReportInstancesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReportInstancesRequest.ProtoReflect.Descriptor instead.
 func (*ReportInstancesRequest) Descriptor() ([]byte, []int) {
-	return file_anden_v1_anden_proto_rawDescGZIP(), []int{22}
+	return file_anden_v1_anden_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *ReportInstancesRequest) GetNode() string {
@@ -1698,7 +1811,7 @@ type ReportInstancesResponse struct {
 
 func (x *ReportInstancesResponse) Reset() {
 	*x = ReportInstancesResponse{}
-	mi := &file_anden_v1_anden_proto_msgTypes[23]
+	mi := &file_anden_v1_anden_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1710,7 +1823,7 @@ func (x *ReportInstancesResponse) String() string {
 func (*ReportInstancesResponse) ProtoMessage() {}
 
 func (x *ReportInstancesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_anden_v1_anden_proto_msgTypes[23]
+	mi := &file_anden_v1_anden_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1723,7 +1836,7 @@ func (x *ReportInstancesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReportInstancesResponse.ProtoReflect.Descriptor instead.
 func (*ReportInstancesResponse) Descriptor() ([]byte, []int) {
-	return file_anden_v1_anden_proto_rawDescGZIP(), []int{23}
+	return file_anden_v1_anden_proto_rawDescGZIP(), []int{24}
 }
 
 var File_anden_v1_anden_proto protoreflect.FileDescriptor
@@ -1816,25 +1929,39 @@ const file_anden_v1_anden_proto_rawDesc = "" +
 	"memory_mib\x18\x06 \x01(\rR\tmemoryMib\"\x12\n" +
 	"\x10ListNodesRequest\"9\n" +
 	"\x11ListNodesResponse\x12$\n" +
-	"\x05nodes\x18\x01 \x03(\v2\x0e.anden.v1.NodeR\x05nodes\"w\n" +
+	"\x05nodes\x18\x01 \x03(\v2\x0e.anden.v1.NodeR\x05nodes\"\x8f\x01\n" +
 	"\x0fRegisterRequest\x12\x12\n" +
 	"\x04node\x18\x01 \x01(\tR\x04node\x12\x12\n" +
 	"\x04addr\x18\x02 \x01(\tR\x04addr\x12\x1d\n" +
 	"\n" +
 	"cpu_millis\x18\x03 \x01(\rR\tcpuMillis\x12\x1d\n" +
 	"\n" +
-	"memory_mib\x18\x04 \x01(\rR\tmemoryMib\"~\n" +
+	"memory_mib\x18\x04 \x01(\rR\tmemoryMib\x12\x16\n" +
+	"\x06subnet\x18\x05 \x01(\tR\x06subnet\"\x9b\x01\n" +
 	"\x10RegisterResponse\x12\x14\n" +
 	"\x05epoch\x18\x01 \x01(\x04R\x05epoch\x12 \n" +
 	"\flease_ttl_ms\x18\x02 \x01(\rR\n" +
 	"leaseTtlMs\x122\n" +
-	"\x15heartbeat_interval_ms\x18\x03 \x01(\rR\x13heartbeatIntervalMs\"<\n" +
+	"\x15heartbeat_interval_ms\x18\x03 \x01(\rR\x13heartbeatIntervalMs\x12\x1b\n" +
+	"\tblobs_url\x18\x04 \x01(\tR\bblobsUrl\"<\n" +
 	"\x10HeartbeatRequest\x12\x12\n" +
 	"\x04node\x18\x01 \x01(\tR\x04node\x12\x14\n" +
-	"\x05epoch\x18\x02 \x01(\x04R\x05epoch\"5\n" +
+	"\x05epoch\x18\x02 \x01(\x04R\x05epoch\"\xbc\x01\n" +
+	"\n" +
+	"Assignment\x12\x1f\n" +
+	"\vinstance_id\x18\x01 \x01(\tR\n" +
+	"instanceId\x12)\n" +
+	"\x04spec\x18\x02 \x01(\v2\x15.anden.v1.ServiceSpecR\x04spec\x12\x18\n" +
+	"\aversion\x18\x03 \x01(\x04R\aversion\x12\x1e\n" +
+	"\n" +
+	"generation\x18\x04 \x01(\x04R\n" +
+	"generation\x12\x12\n" +
+	"\x04addr\x18\x05 \x01(\tR\x04addr\x12\x14\n" +
+	"\x05awake\x18\x06 \x01(\bR\x05awake\"m\n" +
 	"\x11HeartbeatResponse\x12 \n" +
 	"\flease_ttl_ms\x18\x01 \x01(\rR\n" +
-	"leaseTtlMs\"\xe7\x01\n" +
+	"leaseTtlMs\x126\n" +
+	"\vassignments\x18\x02 \x03(\v2\x14.anden.v1.AssignmentR\vassignments\"\xe7\x01\n" +
 	"\x0eInstanceReport\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x18\n" +
 	"\aservice\x18\x02 \x01(\tR\aservice\x12\x18\n" +
@@ -1902,7 +2029,7 @@ func file_anden_v1_anden_proto_rawDescGZIP() []byte {
 }
 
 var file_anden_v1_anden_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
-var file_anden_v1_anden_proto_msgTypes = make([]protoimpl.MessageInfo, 25)
+var file_anden_v1_anden_proto_msgTypes = make([]protoimpl.MessageInfo, 26)
 var file_anden_v1_anden_proto_goTypes = []any{
 	(ServiceState)(0),               // 0: anden.v1.ServiceState
 	(WakeRoute)(0),                  // 1: anden.v1.WakeRoute
@@ -1928,14 +2055,15 @@ var file_anden_v1_anden_proto_goTypes = []any{
 	(*RegisterRequest)(nil),         // 21: anden.v1.RegisterRequest
 	(*RegisterResponse)(nil),        // 22: anden.v1.RegisterResponse
 	(*HeartbeatRequest)(nil),        // 23: anden.v1.HeartbeatRequest
-	(*HeartbeatResponse)(nil),       // 24: anden.v1.HeartbeatResponse
-	(*InstanceReport)(nil),          // 25: anden.v1.InstanceReport
-	(*ReportInstancesRequest)(nil),  // 26: anden.v1.ReportInstancesRequest
-	(*ReportInstancesResponse)(nil), // 27: anden.v1.ReportInstancesResponse
-	nil,                             // 28: anden.v1.ServiceSpec.EnvEntry
+	(*Assignment)(nil),              // 24: anden.v1.Assignment
+	(*HeartbeatResponse)(nil),       // 25: anden.v1.HeartbeatResponse
+	(*InstanceReport)(nil),          // 26: anden.v1.InstanceReport
+	(*ReportInstancesRequest)(nil),  // 27: anden.v1.ReportInstancesRequest
+	(*ReportInstancesResponse)(nil), // 28: anden.v1.ReportInstancesResponse
+	nil,                             // 29: anden.v1.ServiceSpec.EnvEntry
 }
 var file_anden_v1_anden_proto_depIdxs = []int32{
-	28, // 0: anden.v1.ServiceSpec.env:type_name -> anden.v1.ServiceSpec.EnvEntry
+	29, // 0: anden.v1.ServiceSpec.env:type_name -> anden.v1.ServiceSpec.EnvEntry
 	1,  // 1: anden.v1.ServiceSpec.wake_route:type_name -> anden.v1.WakeRoute
 	4,  // 2: anden.v1.ServiceSpec.healthcheck:type_name -> anden.v1.Healthcheck
 	5,  // 3: anden.v1.ServiceSpec.volumes:type_name -> anden.v1.Volume
@@ -1948,37 +2076,39 @@ var file_anden_v1_anden_proto_depIdxs = []int32{
 	6,  // 10: anden.v1.DeployServiceRequest.spec:type_name -> anden.v1.ServiceSpec
 	3,  // 11: anden.v1.Node.state:type_name -> anden.v1.NodeState
 	18, // 12: anden.v1.ListNodesResponse.nodes:type_name -> anden.v1.Node
-	2,  // 13: anden.v1.InstanceReport.state:type_name -> anden.v1.InstanceState
-	25, // 14: anden.v1.ReportInstancesRequest.instances:type_name -> anden.v1.InstanceReport
-	9,  // 15: anden.v1.Anden.CreateService:input_type -> anden.v1.CreateServiceRequest
-	10, // 16: anden.v1.Anden.GetService:input_type -> anden.v1.GetServiceRequest
-	11, // 17: anden.v1.Anden.ListServices:input_type -> anden.v1.ListServicesRequest
-	13, // 18: anden.v1.Anden.SleepService:input_type -> anden.v1.SleepServiceRequest
-	14, // 19: anden.v1.Anden.WakeService:input_type -> anden.v1.WakeServiceRequest
-	15, // 20: anden.v1.Anden.DeleteService:input_type -> anden.v1.DeleteServiceRequest
-	16, // 21: anden.v1.Anden.DeployService:input_type -> anden.v1.DeployServiceRequest
-	17, // 22: anden.v1.Anden.MoveService:input_type -> anden.v1.MoveServiceRequest
-	19, // 23: anden.v1.Anden.ListNodes:input_type -> anden.v1.ListNodesRequest
-	21, // 24: anden.v1.AgentControl.Register:input_type -> anden.v1.RegisterRequest
-	23, // 25: anden.v1.AgentControl.Heartbeat:input_type -> anden.v1.HeartbeatRequest
-	26, // 26: anden.v1.AgentControl.ReportInstances:input_type -> anden.v1.ReportInstancesRequest
-	8,  // 27: anden.v1.Anden.CreateService:output_type -> anden.v1.Service
-	8,  // 28: anden.v1.Anden.GetService:output_type -> anden.v1.Service
-	12, // 29: anden.v1.Anden.ListServices:output_type -> anden.v1.ListServicesResponse
-	8,  // 30: anden.v1.Anden.SleepService:output_type -> anden.v1.Service
-	8,  // 31: anden.v1.Anden.WakeService:output_type -> anden.v1.Service
-	8,  // 32: anden.v1.Anden.DeleteService:output_type -> anden.v1.Service
-	8,  // 33: anden.v1.Anden.DeployService:output_type -> anden.v1.Service
-	8,  // 34: anden.v1.Anden.MoveService:output_type -> anden.v1.Service
-	20, // 35: anden.v1.Anden.ListNodes:output_type -> anden.v1.ListNodesResponse
-	22, // 36: anden.v1.AgentControl.Register:output_type -> anden.v1.RegisterResponse
-	24, // 37: anden.v1.AgentControl.Heartbeat:output_type -> anden.v1.HeartbeatResponse
-	27, // 38: anden.v1.AgentControl.ReportInstances:output_type -> anden.v1.ReportInstancesResponse
-	27, // [27:39] is the sub-list for method output_type
-	15, // [15:27] is the sub-list for method input_type
-	15, // [15:15] is the sub-list for extension type_name
-	15, // [15:15] is the sub-list for extension extendee
-	0,  // [0:15] is the sub-list for field type_name
+	6,  // 13: anden.v1.Assignment.spec:type_name -> anden.v1.ServiceSpec
+	24, // 14: anden.v1.HeartbeatResponse.assignments:type_name -> anden.v1.Assignment
+	2,  // 15: anden.v1.InstanceReport.state:type_name -> anden.v1.InstanceState
+	26, // 16: anden.v1.ReportInstancesRequest.instances:type_name -> anden.v1.InstanceReport
+	9,  // 17: anden.v1.Anden.CreateService:input_type -> anden.v1.CreateServiceRequest
+	10, // 18: anden.v1.Anden.GetService:input_type -> anden.v1.GetServiceRequest
+	11, // 19: anden.v1.Anden.ListServices:input_type -> anden.v1.ListServicesRequest
+	13, // 20: anden.v1.Anden.SleepService:input_type -> anden.v1.SleepServiceRequest
+	14, // 21: anden.v1.Anden.WakeService:input_type -> anden.v1.WakeServiceRequest
+	15, // 22: anden.v1.Anden.DeleteService:input_type -> anden.v1.DeleteServiceRequest
+	16, // 23: anden.v1.Anden.DeployService:input_type -> anden.v1.DeployServiceRequest
+	17, // 24: anden.v1.Anden.MoveService:input_type -> anden.v1.MoveServiceRequest
+	19, // 25: anden.v1.Anden.ListNodes:input_type -> anden.v1.ListNodesRequest
+	21, // 26: anden.v1.AgentControl.Register:input_type -> anden.v1.RegisterRequest
+	23, // 27: anden.v1.AgentControl.Heartbeat:input_type -> anden.v1.HeartbeatRequest
+	27, // 28: anden.v1.AgentControl.ReportInstances:input_type -> anden.v1.ReportInstancesRequest
+	8,  // 29: anden.v1.Anden.CreateService:output_type -> anden.v1.Service
+	8,  // 30: anden.v1.Anden.GetService:output_type -> anden.v1.Service
+	12, // 31: anden.v1.Anden.ListServices:output_type -> anden.v1.ListServicesResponse
+	8,  // 32: anden.v1.Anden.SleepService:output_type -> anden.v1.Service
+	8,  // 33: anden.v1.Anden.WakeService:output_type -> anden.v1.Service
+	8,  // 34: anden.v1.Anden.DeleteService:output_type -> anden.v1.Service
+	8,  // 35: anden.v1.Anden.DeployService:output_type -> anden.v1.Service
+	8,  // 36: anden.v1.Anden.MoveService:output_type -> anden.v1.Service
+	20, // 37: anden.v1.Anden.ListNodes:output_type -> anden.v1.ListNodesResponse
+	22, // 38: anden.v1.AgentControl.Register:output_type -> anden.v1.RegisterResponse
+	25, // 39: anden.v1.AgentControl.Heartbeat:output_type -> anden.v1.HeartbeatResponse
+	28, // 40: anden.v1.AgentControl.ReportInstances:output_type -> anden.v1.ReportInstancesResponse
+	29, // [29:41] is the sub-list for method output_type
+	17, // [17:29] is the sub-list for method input_type
+	17, // [17:17] is the sub-list for extension type_name
+	17, // [17:17] is the sub-list for extension extendee
+	0,  // [0:17] is the sub-list for field type_name
 }
 
 func init() { file_anden_v1_anden_proto_init() }
@@ -1997,7 +2127,7 @@ func file_anden_v1_anden_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_anden_v1_anden_proto_rawDesc), len(file_anden_v1_anden_proto_rawDesc)),
 			NumEnums:      4,
-			NumMessages:   25,
+			NumMessages:   26,
 			NumExtensions: 0,
 			NumServices:   2,
 		},

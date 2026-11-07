@@ -3,9 +3,12 @@ package controlplane
 import (
 	"context"
 	"errors"
+	"log"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"time"
 
 	"google.golang.org/grpc"
@@ -14,18 +17,59 @@ import (
 	"github.com/CesarManzoCode/anden/internal/store"
 )
 
+// Options are the optional parts of andend. Empty fields disable them.
+type Options struct {
+	// Registry is the central image store whose blobs agents fetch.
+	Registry string
+	// BlobsListen is the TCP address of the blob server.
+	BlobsListen string
+	// EdgeIP is the address of the edge of D21.
+	EdgeIP string
+}
+
 type ControlPlane struct {
 	store *store.Store
 	rec   *Reconciler
 	live  *liveness
+	opts  Options
 }
 
-func New(st *store.Store) *ControlPlane {
-	return &ControlPlane{store: st, rec: NewReconciler(st), live: newLiveness()}
+func New(st *store.Store, opts Options) *ControlPlane {
+	c := &ControlPlane{store: st, rec: NewReconciler(st), live: newLiveness(), opts: opts}
+	c.rec.ready = c.live.ready
+	if opts.EdgeIP != "" {
+		c.rec.edge = NewEdge(opts.EdgeIP)
+	}
+	return c
+}
+
+func (c *ControlPlane) blobsURL() string {
+	if c.opts.BlobsListen == "" {
+		return ""
+	}
+	return "http://" + c.opts.BlobsListen
+}
+
+var blobHexRE = regexp.MustCompile(`^[0-9a-f]{64}$`)
+
+// blobHandler serves GET /blobs/sha256/<hex> from a store. The agent verifies
+// each blob against its digest as it receives it.
+func blobHandler(registry string) http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /blobs/sha256/{hex}", func(w http.ResponseWriter, r *http.Request) {
+		hex := r.PathValue("hex")
+		if !blobHexRE.MatchString(hex) {
+			http.NotFound(w, r)
+			return
+		}
+		http.ServeFile(w, r, filepath.Join(registry, "blobs", "sha256", hex))
+	})
+	return mux
 }
 
 // Serve answers gRPC on the Unix socket for host clients and, when tcpAddr is
-// not empty, on TCP for agents (D23), and runs the reconciler until ctx ends.
+// not empty, on TCP for agents (D23), serves blobs if configured, and runs the
+// reconciler until ctx ends.
 func (c *ControlPlane) Serve(ctx context.Context, unixPath, tcpAddr string, interval time.Duration) error {
 	if err := os.MkdirAll(filepath.Dir(unixPath), 0o700); err != nil {
 		return err
@@ -46,6 +90,22 @@ func (c *ControlPlane) Serve(ctx context.Context, unixPath, tcpAddr string, inte
 			return err
 		}
 		listeners = append(listeners, tl)
+	}
+	if c.opts.Registry != "" && c.opts.BlobsListen != "" {
+		bl, err := net.Listen("tcp", c.opts.BlobsListen)
+		if err != nil {
+			for _, l := range listeners {
+				l.Close()
+			}
+			return err
+		}
+		blobs := &http.Server{Handler: blobHandler(c.opts.Registry)}
+		defer blobs.Close()
+		go func() {
+			if err := blobs.Serve(bl); !errors.Is(err, http.ErrServerClosed) {
+				log.Printf("blob server: %v", err)
+			}
+		}()
 	}
 
 	srv := grpc.NewServer()

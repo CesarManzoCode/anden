@@ -121,6 +121,17 @@ Fuentes primarias con su revisión fijada, consultadas el 6 nov 2026. Una págin
 | `/proc/self/status` | kernel 7.2.14 | `NSpid:` lista el pid en cada namespace de pid, del más externo al propio |
 | `man nft` | nftables 1.1.7 | `list tables [family]`, `list ruleset` |
 
+## Agente de nodo (consultado el 6 nov 2026 para k2-03)
+
+| Fuente | Revisión | Dato usado |
+|---|---|---|
+| `unshare`, ejecutado en un namespace de usuario y de montaje, y `man unshare` | util-linux 2.42.4 | `--net=F --uts=F --ipc=F true` deja los tres namespaces persistentes como montajes `nsfs` sobre `F`. El archivo debe existir antes y la ruta debe ser absoluta: sin el archivo falla con `No such file or directory`. El montaje debe tener propagación no compartida, y es `private` tras `unshare --mount` y un `mount --bind D D` |
+| `ip -batch -` y `nsenter`, ejecutados | iproute2 7.3.0, util-linux 2.42.4 | `link set DEV netns /ruta/net.ns` acepta una ruta absoluta a un archivo de namespace que exista; con el archivo ausente da `Invalid "netns" value`. `nsenter --net=/ruta/net.ns -- ip -batch -` configura adentro. La IP responde `ping` desde `svc0`. `ip link del` borra el par, y `umount -l` libera los archivos |
+| `nft -f -`, ejecutado | nftables 1.1.7 | El guion que crea `table ip anden_edge {}`, la borra y la vuelve a declarar con su mapa corre dos veces seguidas sin error, así que sirve aunque ya exista. `delete element ... { PUERTO }` más `add element` cambia el valor de una clave en una transacción |
+| grpc, `dialoptions.go`, `backoff.go`, `backoff/backoff.go`, `clientconn.go` | `google.golang.org/grpc` v1.85.0 | `WithNoProxy`, `WithConnectParams(ConnectParams{Backoff: backoff.Config{BaseDelay, Multiplier, Jitter, MaxDelay}, MinConnectTimeout})`. El `BaseDelay` por defecto es 1 s y el máximo 120 s. `grpc` registra el resolvedor `passthrough` |
+| `/sys/fs/cgroup/.../memory.swap.max`, `/proc/swaps` | kernel 7.2.14 | El archivo existe en la cgroup del usuario y la máquina tiene swap en `/dev/zram0`, de ahí que una instancia lo ponga en 0 para que exceder `memory.max` termine en OOM |
+| Go, `net/http.ServeMux` (`go doc`) | go1.27.3 | Patrones con método y comodín, y `Request.PathValue` |
+
 ## Documentación oficial sin revisión fija (consultada el 6 nov 2026)
 
 | Fuente | Dato |

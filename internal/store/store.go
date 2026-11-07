@@ -43,7 +43,11 @@ type Service struct {
 	Version      int64
 	DesiredAwake bool
 	DesiredNode  string
-	Deleted      bool
+	// DesiredAddr is the fixed address of the service, empty until placed.
+	DesiredAddr string
+	// Generation grows each time the service needs a brand new instance.
+	Generation int64
+	Deleted    bool
 	// Revision grows with every desired change; observed writes carry the
 	// revision they were computed from and lose against a newer one.
 	Revision int64
@@ -63,6 +67,7 @@ type Observed struct {
 type Node struct {
 	Name      string
 	Addr      string
+	Subnet    string
 	Epoch     int64
 	CPUMillis int32
 	MemoryMiB int32
@@ -139,11 +144,11 @@ func migrate(ctx context.Context, pool *pgxpool.Pool) error {
 	})
 }
 
-const serviceColumns = "name, spec, version, desired_awake, desired_node, deleted, revision, state, node, addr, edge_port"
+const serviceColumns = "name, spec, version, desired_awake, desired_node, desired_addr, generation, deleted, revision, state, node, addr, edge_port"
 
 func scanService(row pgx.Row) (Service, error) {
 	var v Service
-	err := row.Scan(&v.Name, &v.Spec, &v.Version, &v.DesiredAwake, &v.DesiredNode, &v.Deleted,
+	err := row.Scan(&v.Name, &v.Spec, &v.Version, &v.DesiredAwake, &v.DesiredNode, &v.DesiredAddr, &v.Generation, &v.Deleted,
 		&v.Revision, &v.State, &v.Node, &v.Addr, &v.EdgePort)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return v, ErrNotFound
@@ -209,8 +214,9 @@ func (s *Store) UpdateDesired(ctx context.Context, name string, fn func(*Service
 			return err
 		}
 		out, err = scanService(tx.QueryRow(ctx, `UPDATE services SET spec = $2, version = $3, desired_awake = $4,
-			desired_node = $5, deleted = $6, state = $7, revision = revision + 1 WHERE name = $1 RETURNING `+serviceColumns,
-			name, cur.Spec, cur.Version, cur.DesiredAwake, cur.DesiredNode, cur.Deleted, cur.State))
+			desired_node = $5, desired_addr = $6, generation = $7, deleted = $8, state = $9, revision = revision + 1
+			WHERE name = $1 RETURNING `+serviceColumns,
+			name, cur.Spec, cur.Version, cur.DesiredAwake, cur.DesiredNode, cur.DesiredAddr, cur.Generation, cur.Deleted, cur.State))
 		return err
 	})
 	return out, err
@@ -224,6 +230,23 @@ func (s *Store) SetObserved(ctx context.Context, name string, revision int64, ob
 	return tag.RowsAffected() == 1, err
 }
 
+// SetPlacement stores where the reconciler placed a service, if it is still
+// at revision. It reports whether the row was written.
+func (s *Store) SetPlacement(ctx context.Context, name string, revision int64, node, addr string) (bool, error) {
+	tag, err := s.pool.Exec(ctx, "UPDATE services SET desired_node = $3, desired_addr = $4 WHERE name = $1 AND revision = $2",
+		name, revision, node, addr)
+	return tag.RowsAffected() == 1, err
+}
+
+// Assignments returns the live services placed on node, ordered by name.
+func (s *Store) Assignments(ctx context.Context, node string) ([]Service, error) {
+	rows, err := s.pool.Query(ctx, "SELECT "+serviceColumns+" FROM services WHERE desired_node = $1 AND desired_addr <> '' AND NOT deleted ORDER BY name", node)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (Service, error) { return scanService(row) })
+}
+
 // Purge removes a service marked as deleted, if still at revision.
 func (s *Store) Purge(ctx context.Context, name string, revision int64) error {
 	_, err := s.pool.Exec(ctx, "DELETE FROM services WHERE name = $1 AND revision = $2 AND deleted", name, revision)
@@ -234,21 +257,21 @@ func (s *Store) Purge(ctx context.Context, name string, revision int64) error {
 // last one it had.
 func (s *Store) RegisterNode(ctx context.Context, n Node) (int64, error) {
 	var epoch int64
-	err := s.pool.QueryRow(ctx, `INSERT INTO nodes (name, addr, epoch, cpu_millis, memory_mib) VALUES ($1, $2, 1, $3, $4)
-		ON CONFLICT (name) DO UPDATE SET addr = excluded.addr, epoch = nodes.epoch + 1,
+	err := s.pool.QueryRow(ctx, `INSERT INTO nodes (name, addr, subnet, epoch, cpu_millis, memory_mib) VALUES ($1, $2, $3, 1, $4, $5)
+		ON CONFLICT (name) DO UPDATE SET addr = excluded.addr, subnet = excluded.subnet, epoch = nodes.epoch + 1,
 			cpu_millis = excluded.cpu_millis, memory_mib = excluded.memory_mib
-		RETURNING epoch`, n.Name, n.Addr, n.CPUMillis, n.MemoryMiB).Scan(&epoch)
+		RETURNING epoch`, n.Name, n.Addr, n.Subnet, n.CPUMillis, n.MemoryMiB).Scan(&epoch)
 	return epoch, err
 }
 
 func (s *Store) ListNodes(ctx context.Context) ([]Node, error) {
-	rows, err := s.pool.Query(ctx, "SELECT name, addr, epoch, cpu_millis, memory_mib FROM nodes ORDER BY name")
+	rows, err := s.pool.Query(ctx, "SELECT name, addr, subnet, epoch, cpu_millis, memory_mib FROM nodes ORDER BY name")
 	if err != nil {
 		return nil, err
 	}
 	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (Node, error) {
 		var n Node
-		err := row.Scan(&n.Name, &n.Addr, &n.Epoch, &n.CPUMillis, &n.MemoryMiB)
+		err := row.Scan(&n.Name, &n.Addr, &n.Subnet, &n.Epoch, &n.CPUMillis, &n.MemoryMiB)
 		return n, err
 	})
 }

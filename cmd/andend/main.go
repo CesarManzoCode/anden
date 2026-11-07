@@ -1,5 +1,6 @@
 // Command andend is Andén's control plane: gRPC API on a Unix socket and on
-// TCP, state in PostgreSQL over a Unix socket, and the level reconciler.
+// TCP, state in PostgreSQL over a Unix socket, the level reconciler, the blob
+// server for agents and the edge.
 package main
 
 import (
@@ -30,6 +31,9 @@ func run(args []string, stderr io.Writer) int {
 	pgDatabase := flags.String("pg-database", "postgres", "PostgreSQL database")
 	connectTimeout := flags.Duration("pg-connect-timeout", 30*time.Second, "how long to retry the first connection")
 	interval := flags.Duration("reconcile-interval", 200*time.Millisecond, "time between reconciler passes")
+	registry := flags.String("registry", "", "central image store to serve blobs from; empty disables the blob server")
+	blobsListen := flags.String("blobs-listen", "", "TCP address of the blob server")
+	edgeIP := flags.String("edge-ip", "", "edge address to program in nftables; empty disables the edge")
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}
@@ -48,7 +52,7 @@ func run(args []string, stderr io.Writer) int {
 	}
 	defer st.Close()
 
-	if err := controlplane.New(st).Serve(ctx, *apiSocket, *listen, *interval); err != nil {
+	if err := controlplane.New(st, controlplane.Options{Registry: *registry, BlobsListen: *blobsListen, EdgeIP: *edgeIP}).Serve(ctx, *apiSocket, *listen, *interval); err != nil {
 		fmt.Fprintln(stderr, "andend:", err)
 		return 1
 	}

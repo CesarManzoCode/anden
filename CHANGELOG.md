@@ -26,6 +26,11 @@
 - `anden svc create|get|list|sleep|wake|delete|deploy|move`, que envuelve la API.
 - `anden up`, `down`, `status`, `exec` y `chaos kill`: levantan y destruyen el datacenter simulado (scope de systemd delegado, Postgres, namespace de usuario con el plano de control, tres nodos y un cliente), corren un comando en el netns de un nodo, del cliente o raíz, y tiran un nodo con `cgroup.kill`.
 - Criterio de aceptación C27 (`acceptance/c27_lifecycle.py`): ciclo de vida sin rastro.
+- `anden-agent`, el agente de nodo: se registra, late cada 500 ms y arranca y para instancias según lo que pide el plano de control. Cada instancia tiene cgroup, overlay, `resolv.conf`, namespaces de red, UTS e IPC propios, veth a `svc0` con su IP, los límites de su `ServiceSpec` y el filtro seccomp; su salida queda en `/.anden/stdio.log`. Las capas que le faltan al nodo llegan por HTTP desde `andend`, con su digest verificado.
+- `andend` coloca los servicios en el primer nodo con capacidad, les asigna una IP, sirve blobs en `10.80.0.1:7444` y programa el borde: cada servicio responde en `10.80.0.2:<edge_port>`. El simulador reinicia `andend` si muere, y las instancias siguen corriendo.
+- `WakeService` reemplaza una instancia en `FAILED`; `DeployService` y `MoveService` paran la instancia y arrancan otra.
+- `echosvc` responde a `/hog`, `/fork` y `/burn`, que exceden a propósito sus límites.
+- Criterios de aceptación C2 (`acceptance/c02_durability.py`), C4 (`c04_memory.py`) y C5 (`c05_pids_cpu.py`).
 
 - Contrato del sistema, con decisiones cerradas de lenguaje, arquitectura, rutas de despertar, proxy, simulador, colocación y fencing.
 - Investigación con fuentes primarias y versiones de herramientas verificadas en la máquina de destino.

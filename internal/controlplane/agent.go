@@ -62,6 +62,7 @@ func (a *agentService) Register(ctx context.Context, req *andenv1.RegisterReques
 	epoch, err := a.cp.store.RegisterNode(ctx, store.Node{
 		Name:      req.GetNode(),
 		Addr:      req.GetAddr(),
+		Subnet:    req.GetSubnet(),
 		CPUMillis: int32(req.GetCpuMillis()),
 		MemoryMiB: int32(req.GetMemoryMib()),
 	})
@@ -73,6 +74,7 @@ func (a *agentService) Register(ctx context.Context, req *andenv1.RegisterReques
 		Epoch:               uint64(epoch),
 		LeaseTtlMs:          uint32(leaseTTL / time.Millisecond),
 		HeartbeatIntervalMs: uint32(heartbeatInterval / time.Millisecond),
+		BlobsUrl:            a.cp.blobsURL(),
 	}, nil
 }
 
@@ -85,7 +87,15 @@ func (a *agentService) Heartbeat(ctx context.Context, req *andenv1.HeartbeatRequ
 		return nil, status.Errorf(codes.FailedPrecondition, "epoch %d of %s is stale, current is %d", req.GetEpoch(), req.GetNode(), epoch)
 	}
 	a.cp.live.touch(req.GetNode())
-	return &andenv1.HeartbeatResponse{LeaseTtlMs: uint32(leaseTTL / time.Millisecond)}, nil
+	services, err := a.cp.store.Assignments(ctx, req.GetNode())
+	if err != nil {
+		return nil, grpcError(err)
+	}
+	assignments, err := toAssignments(services)
+	if err != nil {
+		return nil, grpcError(err)
+	}
+	return &andenv1.HeartbeatResponse{LeaseTtlMs: uint32(leaseTTL / time.Millisecond), Assignments: assignments}, nil
 }
 
 func (a *agentService) ReportInstances(ctx context.Context, req *andenv1.ReportInstancesRequest) (*andenv1.ReportInstancesResponse, error) {

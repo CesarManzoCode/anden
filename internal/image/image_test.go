@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -180,6 +181,68 @@ func TestImportVerifiesDigest(t *testing.T) {
 	}
 	if _, err := openStore(t).Unpack(s, man.Digest); !errors.Is(err, ErrMismatch) {
 		t.Fatalf("Unpack of a corrupted blob: %v, want ErrMismatch", err)
+	}
+}
+
+func TestFetchVerifiesEveryBlob(t *testing.T) {
+	layout := t.TempDir()
+	man := writeTestLayout(t, layout, "v1", []testLayer{plainLayer})
+	blobs := filepath.Join(layout, "blobs", "sha256")
+	open := func(d Digest) (io.ReadCloser, error) { return os.Open(filepath.Join(blobs, d.Hex())) }
+
+	s := openStore(t)
+	img, err := s.Fetch(man.Digest, open)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if img.Digest != man.Digest || len(img.Layers) != 1 {
+		t.Fatalf("Fetch = %+v", img)
+	}
+	if checked, mismatches, err := s.Verify(); err != nil || checked != 3 || len(mismatches) != 0 {
+		t.Fatalf("Verify = %d, %v, %v", checked, mismatches, err)
+	}
+	// What is already there is not asked for again.
+	if _, err := s.Fetch(man.Digest, func(d Digest) (io.ReadCloser, error) { return nil, fmt.Errorf("asked for %s", d) }); err != nil {
+		t.Fatal(err)
+	}
+
+	layer := filepath.Join(blobs, img.Layers[0].Digest.Hex())
+	raw, err := os.ReadFile(layer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw[0] ^= 0xff
+	if err := os.WriteFile(layer, raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := openStore(t).Fetch(man.Digest, open); !errors.Is(err, ErrMismatch) {
+		t.Fatalf("a changed layer must be refused, got %v", err)
+	}
+}
+
+func TestImageRunConfig(t *testing.T) {
+	layout := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(layout, "blobs", "sha256"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	raw := buildTar(t, plainLayer.entries)
+	layerDigest := putTestBlob(t, layout, raw)
+	var cfg imageConfig
+	cfg.Config = RunConfig{Entrypoint: []string{"/e"}, Cmd: []string{"c"}, Env: []string{"A=1"}, WorkingDir: "/w"}
+	cfg.RootFS.Type = "layers"
+	cfg.RootFS.DiffIDs = []Digest{sha(raw)}
+	m := manifest{MediaType: mediaManifest, Config: putTestJSON(t, layout, mediaConfig, cfg),
+		Layers: []descriptor{{MediaType: mediaLayerTar, Digest: layerDigest, Size: int64(len(raw))}}}
+	man := putTestJSON(t, layout, mediaManifest, m)
+	s := openStore(t)
+	img, err := s.Fetch(man.Digest, func(d Digest) (io.ReadCloser, error) {
+		return os.Open(filepath.Join(layout, "blobs", "sha256", d.Hex()))
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if img.Run.Entrypoint[0] != "/e" || img.Run.Cmd[0] != "c" || img.Run.Env[0] != "A=1" || img.Run.WorkingDir != "/w" {
+		t.Fatalf("Run = %+v", img.Run)
 	}
 }
 

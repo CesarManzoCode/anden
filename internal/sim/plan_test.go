@@ -153,13 +153,28 @@ func TestCommandLines(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("AgentArgs = %q", got)
 	}
-	if got := AndendArgs("/run/user/1000/anden-h"); !reflect.DeepEqual(got, []string{
-		"--api-socket", "/run/user/1000/anden-h/api.sock", "--listen", "10.80.0.1:7443", "--pg-socket-dir", "/run/user/1000/anden-h"}) {
+	if got := AndendArgs("/s", "/run/user/1000/anden-h"); !reflect.DeepEqual(got, []string{
+		"--api-socket", "/run/user/1000/anden-h/api.sock", "--listen", "10.80.0.1:7443", "--pg-socket-dir", "/run/user/1000/anden-h",
+		"--registry", "/s/registry", "--blobs-listen", "10.80.0.1:7444", "--edge-ip", "10.80.0.2"}) {
 		t.Fatalf("AndendArgs = %q", got)
 	}
 	if got := ExecArgs(42, []string{"nft", "list", "tables"}); !reflect.DeepEqual(got, []string{
 		"--preserve-credentials", "-U", "-n", "-t", "42", "--", "nft", "list", "tables"}) {
 		t.Fatalf("ExecArgs = %q", got)
+	}
+}
+
+func TestNodeCapacity(t *testing.T) {
+	total, err := parseMemTotal([]byte("Other: 1 kB\nMemTotal:       14680064 kB\nMemFree: 2 kB\n"))
+	if err != nil || total != 14680064 {
+		t.Fatalf("parseMemTotal = %d, %v", total, err)
+	}
+	if _, err := parseMemTotal([]byte("MemFree: 2 kB\n")); err == nil {
+		t.Fatal("meminfo without MemTotal must fail")
+	}
+	cpu, mem := NodeCapacity(12, total)
+	if cpu != 4000 || mem != 4778 {
+		t.Fatalf("NodeCapacity = %d, %d", cpu, mem)
 	}
 }
 

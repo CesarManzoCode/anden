@@ -171,12 +171,16 @@ message RegisterRequest {
   string addr = 2;
   uint32 cpu_millis = 3;
   uint32 memory_mib = 4;
+  // Subnet of the node's svc0 bridge, from which instance addresses come.
+  string subnet = 5;
 }
 
 message RegisterResponse {
   uint64 epoch = 1;
   uint32 lease_ttl_ms = 2;
   uint32 heartbeat_interval_ms = 3;
+  // Base URL of the blob server: GET <blobs_url>/blobs/sha256/<hex>.
+  string blobs_url = 4;
 }
 
 message HeartbeatRequest {
@@ -184,8 +188,21 @@ message HeartbeatRequest {
   uint64 epoch = 2;
 }
 
+// Assignment is one service placed on the node. An instance with instance_id
+// runs when awake is set; any other instance of the node stops.
+message Assignment {
+  string instance_id = 1;
+  ServiceSpec spec = 2;
+  uint64 version = 3;
+  uint64 generation = 4;
+  string addr = 5;
+  bool awake = 6;
+}
+
 message HeartbeatResponse {
   uint32 lease_ttl_ms = 1;
+  // Everything the control plane wants on the node, in full on every beat.
+  repeated Assignment assignments = 2;
 }
 
 message InstanceReport {

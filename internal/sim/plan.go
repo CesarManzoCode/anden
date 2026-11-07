@@ -23,6 +23,7 @@ const (
 	EdgeIP     = "10.80.0.2"
 	ClientIP   = "10.80.0.100"
 	AgentPort  = 7443
+	BlobsPort  = 7444
 	ClientName = "client"
 	RootName   = "root"
 
@@ -220,12 +221,36 @@ func AgentArgs(n Node, state, dcCgroup, binDir string) []string {
 }
 
 // AndendArgs is the command line of the control plane, after the binary.
-func AndendArgs(sockets string) []string {
+func AndendArgs(state, sockets string) []string {
 	return []string{
 		"--api-socket", APISocket(sockets),
 		"--listen", RootIP + ":" + strconv.Itoa(AgentPort),
 		"--pg-socket-dir", sockets,
+		"--registry", filepath.Join(state, "registry"),
+		"--blobs-listen", RootIP + ":" + strconv.Itoa(BlobsPort),
+		"--edge-ip", EdgeIP,
 	}
+}
+
+// NodeCapacity is what one node offers: an equal share of the machine.
+func NodeCapacity(cpus int, memTotalKiB int64) (cpuMillis, memoryMiB int64) {
+	return int64(cpus) * 1000 / NodeCount, memTotalKiB / 1024 / NodeCount
+}
+
+// parseMemTotal returns MemTotal of /proc/meminfo, in KiB.
+func parseMemTotal(meminfo []byte) (int64, error) {
+	for _, line := range strings.Split(string(meminfo), "\n") {
+		rest, ok := strings.CutPrefix(line, "MemTotal:")
+		if !ok {
+			continue
+		}
+		fields := strings.Fields(rest)
+		if len(fields) == 0 {
+			break
+		}
+		return strconv.ParseInt(fields[0], 10, 64)
+	}
+	return 0, fmt.Errorf("no MemTotal in meminfo")
 }
 
 // ExecArgs is the nsenter command line of `anden exec`.

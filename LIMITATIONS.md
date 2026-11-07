@@ -55,14 +55,30 @@ Fuente única de lo que Andén no demuestra. Ningún otro archivo los repite.
 
 ## Plano de control
 
-- El reconciliador por ahora solo persiste: calcula el estado observado a partir de lo que reportan los agentes, pero no les ordena nada. `MoveService` guarda el nodo deseado y no mueve el servicio.
+- La colocación es provisional: el primer nodo listo con CPU y memoria libres. No hay anti-afinidad ni best-fit (K4), y un servicio que no cabe en ningún nodo se queda en `CREATING` sin error.
+- Un nodo caído no recoloca sus servicios, y el agente no se autofencia todavía: sin plano de control sigue con lo que tiene.
+- `DeployService` para la instancia vieja y luego arranca la nueva, con tiempo sin servicio: todavía no sigue D24. `MoveService` hace lo mismo y cambia la dirección del servicio; no conserva nada de la instancia anterior.
+- Una instancia que muere queda en `FAILED`, con su cgroup y su rootfs para inspección, y no se reinicia sola: la reemplaza `WakeService`, `DeployService` o `MoveService`.
+- Cada latido lleva todas las asignaciones del nodo y lee Postgres. No está medido cuánto cuesta con muchos servicios.
+- El servidor de blobs (`10.80.0.1:7444`) y la API para agentes no tienen autenticación: su única frontera es la red simulada.
 - La vigencia de un nodo vive en la memoria de `andend`, con su reloj monótono. Tras reiniciar `andend`, un nodo del que no se supo nada cuenta como visto en el arranque, así que se declara muerto 4 s después y no antes.
 - `GetService` y `ListServices` leen todas las instancias reportadas para armar la respuesta. No está medido cuánto cuesta eso con muchos servicios.
+
+## Instancias
+
+- Los volúmenes de `ServiceSpec` se aceptan y se guardan, pero el agente todavía no los monta.
+- El contenedor corre como uid 0 del namespace: el campo `User` de la imagen se ignora.
+- Solo monta `/proc` y `/dev` (el `tmpfs` y los nodos del runtime). No hay `/sys`, `/dev/shm` ni `/dev/pts`.
+- `memory.swap.max` queda en 0 en toda instancia: una instancia no usa swap aunque el nodo lo tenga.
+- `/.anden/stdio.log` crece sin límite dentro del `upper` de la instancia, y el `stdout` del propio `anden-runtime create` va al mismo archivo.
+- La lista de llamadas que bloquea el filtro seccomp es una decisión propia, sin un perfil de referencia detrás. Un servicio que necesite una de ellas recibe `EPERM`.
+- La capacidad de un nodo simulado es un tercio de los CPU y de la memoria de la máquina, sin reservar nada para el plano de control ni para Postgres.
 
 ## Simulador
 
 - `anden up` necesita `anden-agent` junto a `anden` en `bin/`. Sin él, `_dc-init` falla antes de arrancar `andend` y `up` sale con error.
 - `anden down` solo borra un directorio de estado que tenga `dc.json` o `dc.log`. Si `up` falla, mata el scope pero deja el estado para inspeccionarlo hasta `anden down`.
+- `_dc-init` reinicia `andend` cada vez que sale, sin espera ni límite de intentos.
 - `anden chaos` solo implementa `kill` por ahora; `partition`, `heal` y `slow` no existen todavía.
 - Los procesos de `anden exec` entran al namespace de usuario y de red, no al de montaje del datacenter: ven los montajes del host.
 

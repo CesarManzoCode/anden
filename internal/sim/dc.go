@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -113,7 +114,8 @@ func startPostgres(state, sockets, cgroup string, log io.Writer) error {
 // RunDCInit is `anden _dc-init`, PID 1 of the datacenter namespace. It sits
 // in dc/hold/, because it holds the root netns and dc/ delegates
 // controllers. It builds the network, starts andend and the agents, writes
-// dc.json and then reaps orphans for as long as the datacenter lives.
+// dc.json and then reaps orphans and restarts andend for as long as the
+// datacenter lives.
 func RunDCInit(state, sockets string, log io.Writer) error {
 	fd := os.Getenv(hostProcEnv)
 	if fd == "" {
@@ -211,14 +213,27 @@ func RunDCInit(state, sockets string, log io.Writer) error {
 		}
 	}
 
-	andend, err := startIn(filepath.Join(dcCg, "cp"), filepath.Join(state, "andend.log"),
-		filepath.Join(binDir, "andend"), AndendArgs(sockets)...)
+	startAndend := func() (*os.Process, error) {
+		return startIn(filepath.Join(dcCg, "cp"), filepath.Join(state, "andend.log"),
+			filepath.Join(binDir, "andend"), AndendArgs(state, sockets)...)
+	}
+	andend, err := startAndend()
 	if err != nil {
 		return fmt.Errorf("andend: %w", err)
 	}
+	meminfo, err := os.ReadFile("/proc/meminfo")
+	if err != nil {
+		return err
+	}
+	memTotal, err := parseMemTotal(meminfo)
+	if err != nil {
+		return err
+	}
+	cpuMillis, memoryMiB := NodeCapacity(runtime.NumCPU(), memTotal)
 	for _, n := range Nodes() {
 		args := append([]string{"-t", strconv.Itoa(holders[n.Name]), "-n", "-m", "--", filepath.Join(binDir, "anden-agent")},
 			AgentArgs(n, state, dcCg, binDir)...)
+		args = append(args, "--cpu-millis", strconv.FormatInt(cpuMillis, 10), "--memory-mib", strconv.FormatInt(memoryMiB, 10))
 		if _, err := startIn(filepath.Join(dcCg, n.Name, "agent"), filepath.Join(NodeDisk(state, n.Name), "agent.log"),
 			"nsenter", args...); err != nil {
 			return fmt.Errorf("agent of %s: %w", n.Name, err)
@@ -249,7 +264,7 @@ func RunDCInit(state, sockets string, log io.Writer) error {
 		return err
 	}
 	fmt.Fprintln(log, "anden _dc-init: datacenter up")
-	reap()
+	reap(andend, startAndend, log)
 	return nil
 }
 
@@ -339,11 +354,28 @@ func hostPIDs(hostProc string, inner []int) (int, map[int]int, error) {
 	return self, out, nil
 }
 
-// reap waits for every child and orphan of the namespace, forever.
-func reap() {
+// reap waits for every child and orphan of the namespace, forever, and starts
+// andend again whenever it exits: the durable state is what keeps desired and
+// observed state across its death (C2).
+func reap(andend *os.Process, restart func() (*os.Process, error), log io.Writer) {
 	for {
 		var ws syscall.WaitStatus
-		if _, err := syscall.Wait4(-1, &ws, 0, nil); errors.Is(err, syscall.ECHILD) {
+		pid, err := syscall.Wait4(-1, &ws, 0, nil)
+		if errors.Is(err, syscall.ECHILD) {
+			time.Sleep(time.Second)
+			continue
+		}
+		if err != nil || pid != andend.Pid {
+			continue
+		}
+		fmt.Fprintf(log, "anden _dc-init: andend exited (%v), restarting\n", ws)
+		for {
+			next, err := restart()
+			if err == nil {
+				andend = next
+				break
+			}
+			fmt.Fprintf(log, "anden _dc-init: restart andend: %v\n", err)
 			time.Sleep(time.Second)
 		}
 	}

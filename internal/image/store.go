@@ -45,10 +45,19 @@ type manifest struct {
 }
 
 type imageConfig struct {
+	Config RunConfig `json:"config"`
 	RootFS struct {
 		Type    string   `json:"type"`
 		DiffIDs []Digest `json:"diff_ids"`
 	} `json:"rootfs"`
+}
+
+// RunConfig is how the image says its process runs.
+type RunConfig struct {
+	Entrypoint []string `json:"Entrypoint"`
+	Cmd        []string `json:"Cmd"`
+	Env        []string `json:"Env"`
+	WorkingDir string   `json:"WorkingDir"`
 }
 
 // Layer is one layer of an image: its blob and the digest of its
@@ -64,6 +73,7 @@ type Layer struct {
 type Image struct {
 	Digest Digest
 	Config descriptor
+	Run    RunConfig
 	Layers []Layer
 }
 
@@ -108,11 +118,16 @@ func (s *Store) LayerPath(diffID Digest) string {
 // it copies. A blob already in the store is not copied again: that is the
 // deduplication.
 func (s *Store) putBlob(src string, d descriptor) error {
+	return s.putBlobFrom(func(Digest) (io.ReadCloser, error) { return os.Open(src) }, d)
+}
+
+// putBlobFrom is putBlob reading from whatever open returns for the digest.
+func (s *Store) putBlobFrom(open func(Digest) (io.ReadCloser, error), d descriptor) error {
 	dst := s.blobPath(d.Digest)
 	if _, err := os.Stat(dst); err == nil {
 		return nil
 	}
-	in, err := os.Open(src)
+	in, err := open(d.Digest)
 	if err != nil {
 		return err
 	}
@@ -217,7 +232,7 @@ func (s *Store) Image(d Digest) (Image, error) {
 	if len(cfg.RootFS.DiffIDs) != len(m.Layers) {
 		return Image{}, fmt.Errorf("image %s: %d layers but %d diff IDs", d, len(m.Layers), len(cfg.RootFS.DiffIDs))
 	}
-	img := Image{Digest: d, Config: m.Config}
+	img := Image{Digest: d, Config: m.Config, Run: cfg.Config}
 	for i, l := range m.Layers {
 		diffID, err := ParseDigest(string(cfg.RootFS.DiffIDs[i]))
 		if err != nil {
@@ -327,6 +342,28 @@ func (s *Store) Unpack(src *Store, d Digest) (Image, error) {
 		}
 	}
 	return img, nil
+}
+
+// Fetch brings the manifest d, its config and the layers s lacks through open,
+// which reads a blob from another place, and verifies every blob it copies.
+// Layers are extracted later, by Mount.
+func (s *Store) Fetch(d Digest, open func(Digest) (io.ReadCloser, error)) (Image, error) {
+	if _, err := ParseDigest(string(d)); err != nil {
+		return Image{}, err
+	}
+	if err := s.putBlobFrom(open, descriptor{Digest: d, Size: -1}); err != nil {
+		return Image{}, err
+	}
+	m, err := s.readManifest(d)
+	if err != nil {
+		return Image{}, err
+	}
+	for _, b := range append([]descriptor{m.Config}, m.Layers...) {
+		if err := s.putBlobFrom(open, b); err != nil {
+			return Image{}, err
+		}
+	}
+	return s.Image(d)
 }
 
 // Verify hashes every blob of the store and returns how many it checked and
