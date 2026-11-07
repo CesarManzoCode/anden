@@ -27,7 +27,7 @@ func checkA(t *testing.T, resp *mdns.Msg, want string) {
 		t.Fatalf("reply: %v", resp)
 	}
 	a, ok := resp.Answer[0].(*mdns.A)
-	if !ok || a.A.String() != want || a.Hdr.Ttl != TTL || a.Hdr.Ttl != 1 || a.Hdr.Class != mdns.ClassINET {
+	if !ok || a.A.String() != want || a.Hdr.Ttl != 1 || a.Hdr.Class != mdns.ClassINET {
 		t.Fatalf("answer: %v", resp.Answer[0])
 	}
 }

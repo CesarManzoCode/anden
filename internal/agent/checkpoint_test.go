@@ -50,6 +50,9 @@ func TestDumpArgv(t *testing.T) {
 		"dump", "--network-lock", "skip", "--unprivileged", "--manage-cgroups=ignore",
 		"-t", "4242", "-D", "/tmp/img", "--root", "/",
 		"--external", "net[4026532410]:extnet",
+		"--external", "mnt[/dev/null]:dev-null", "--external", "mnt[/dev/zero]:dev-zero",
+		"--external", "mnt[/dev/full]:dev-full", "--external", "mnt[/dev/random]:dev-random",
+		"--external", "mnt[/dev/urandom]:dev-urandom", "--external", "mnt[/dev/tty]:dev-tty",
 		"-o", "dump.log", "-v2",
 	}
 	if !reflect.DeepEqual(got, want) {
@@ -63,6 +66,9 @@ func TestRestoreArgv(t *testing.T) {
 		"/usr/bin/criu", "restore", "--network-lock", "skip", "--unprivileged", "--manage-cgroups=ignore",
 		"-D", "/s/snapshots/echo-1", "--root", "/s/instances/echo-1/merged",
 		"--inherit-fd", "fd[3]:extnet",
+		"--external", "mnt[dev-null]:/dev/null", "--external", "mnt[dev-zero]:/dev/zero",
+		"--external", "mnt[dev-full]:/dev/full", "--external", "mnt[dev-random]:/dev/random",
+		"--external", "mnt[dev-urandom]:/dev/urandom", "--external", "mnt[dev-tty]:/dev/tty",
 		"-d", "--pidfile", "/s/snapshots/echo-1/restore.pid", "-o", "restore.log", "-v2",
 	}
 	if !reflect.DeepEqual(got, want) {

@@ -115,6 +115,27 @@ func TestBuildConfigSeccompByRoute(t *testing.T) {
 	}
 }
 
+func TestBuildConfigDevAndStdioByRoute(t *testing.T) {
+	devTmpfs := func(c *ociruntime.Spec) bool {
+		return slices.ContainsFunc(c.Mounts, func(m ociruntime.Mount) bool { return m.Destination == "/dev" })
+	}
+	c := parseConfig(t, testInput())
+	if !devTmpfs(c) {
+		t.Errorf("relaunch mounts a tmpfs on /dev: %+v", c.Mounts)
+	}
+	in := testInput()
+	in.spec.WakeRoute = andenv1.WakeRoute_WAKE_ROUTE_RESTORE
+	r := parseConfig(t, in)
+	if devTmpfs(r) {
+		t.Errorf("restore keeps /dev in the rootfs, criu cannot restore a tmpfs twice: %+v", r.Mounts)
+	}
+	for _, s := range []*ociruntime.Spec{c, r} {
+		if s.Annotations[ociruntime.StdioAnnotation] != "/.anden/stdio.log" {
+			t.Errorf("stdio annotation %v", s.Annotations)
+		}
+	}
+}
+
 func TestProcessArgs(t *testing.T) {
 	run := image.RunConfig{Entrypoint: []string{"/e"}, Cmd: []string{"c"}}
 	if got, _ := processArgs(run, nil); !reflect.DeepEqual(got, []string{"/e", "c"}) {

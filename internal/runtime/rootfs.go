@@ -146,8 +146,9 @@ var deviceModes = map[string]uint32{
 	"c": syscall.S_IFCHR, "u": syscall.S_IFCHR, "b": syscall.S_IFBLK, "p": syscall.S_IFIFO,
 }
 
-// defaultDevices are the nodes every container gets on its own /dev.
-var defaultDevices = []string{"null", "zero", "full", "random", "urandom", "tty"}
+// DefaultDevices are the nodes every container gets on its own /dev, bound
+// from the host /dev.
+var DefaultDevices = []string{"null", "zero", "full", "random", "urandom", "tty"}
 
 // setupRootfs builds the container filesystem inside init's mount
 // namespace and pivots into it. Every path after the first bind is
@@ -349,9 +350,11 @@ func setupDev() error {
 	if err := os.MkdirAll(dev, 0o755); err != nil {
 		return err
 	}
-	for _, name := range defaultDevices {
+	for _, name := range DefaultDevices {
 		dest := filepath.Join(dev, name)
-		if _, err := os.Lstat(dest); err == nil {
+		// An empty regular file is the mountpoint an earlier run left in a
+		// /dev that is part of the rootfs: it is bound again.
+		if fi, err := os.Lstat(dest); err == nil && !(fi.Mode().IsRegular() && fi.Size() == 0) {
 			continue
 		}
 		if err := bindDevice("/dev/"+name, dest); err != nil {

@@ -132,7 +132,15 @@ func buildConfig(in configInput) (*ociruntime.Spec, error) {
 	}
 	mounts := []ociruntime.Mount{
 		{Destination: "/proc", Type: "proc", Source: "proc", Options: []string{"nosuid", "noexec", "nodev"}},
-		{Destination: "/dev", Type: "tmpfs", Source: "tmpfs", Options: []string{"nosuid", "strictatime", "mode=755", "size=65536k"}},
+	}
+	// The restore route keeps /dev in the rootfs, where the runtime binds the
+	// device nodes: without root, criu writes the owner of a tmpfs as the host
+	// sees it, a uid the user namespace does not map, so a tmpfs it restored
+	// once cannot be restored again.
+	if seccompEnabled(in.spec) {
+		mounts = append(mounts, ociruntime.Mount{
+			Destination: "/dev", Type: "tmpfs", Source: "tmpfs", Options: []string{"nosuid", "strictatime", "mode=755", "size=65536k"},
+		})
 	}
 	for _, v := range in.spec.GetVolumes() {
 		mounts = append(mounts, ociruntime.Mount{
@@ -150,9 +158,10 @@ func buildConfig(in configInput) (*ociruntime.Spec, error) {
 			},
 			NoNewPrivileges: true,
 		},
-		Root:     &ociruntime.Root{Path: in.rootfs},
-		Hostname: in.spec.GetName(),
-		Mounts:   mounts,
-		Linux:    linux,
+		Root:        &ociruntime.Root{Path: in.rootfs},
+		Hostname:    in.spec.GetName(),
+		Mounts:      mounts,
+		Annotations: map[string]string{ociruntime.StdioAnnotation: "/.anden/stdio.log"},
+		Linux:       linux,
 	}, nil
 }

@@ -84,7 +84,7 @@ Fuente única de lo que Andén no demuestra. Ningún otro archivo los repite.
 
 - Un volumen es un directorio del nodo, `nodes/nodeN/volumes/<nombre>/`, montado con bind. Lo comparten los servicios del mismo nodo que usen ese nombre, sobrevive a dormir y despertar, no tiene cuota, no se borra con el servicio y no sigue a un servicio que cambie de nodo.
 - El contenedor corre como uid 0 del namespace: el campo `User` de la imagen se ignora.
-- Solo monta `/proc` y `/dev` (el `tmpfs` y los nodos del runtime). No hay `/sys`, `/dev/shm` ni `/dev/pts`.
+- Solo monta `/proc` y `/dev` (el `tmpfs` y los nodos del runtime). No hay `/sys`, `/dev/shm` ni `/dev/pts`. En la ruta `restore`, `/dev` no es un `tmpfs`: es el directorio del rootfs, en el `upper/` de la instancia, y los nodos se ligan sobre él, porque CRIU sin root no pudo restaurar por segunda vez un `tmpfs` que ya había restaurado.
 - `memory.swap.max` queda en 0 en toda instancia: una instancia no usa swap aunque el nodo lo tenga.
 - `/.anden/stdio.log` crece sin límite dentro del `upper` de la instancia, y el `stdout` del propio `anden-runtime create` va al mismo archivo.
 - La lista de llamadas que bloquea el filtro seccomp es una decisión propia, sin un perfil de referencia detrás. Un servicio que necesite una de ellas recibe `EPERM`.
@@ -92,8 +92,7 @@ Fuente única de lo que Andén no demuestra. Ningún otro archivo los repite.
 
 ## Dormir y despertar
 
-- La ruta `restore` está escrita (k3-01) pero no se ha ejecutado dentro del agente: la receta de D03 se observó en K0 fuera de Andén. Hasta que C12 a C14 la midan, que conserve la memoria es hipótesis.
-- La vista de montaje del volcado solo pone `/dev/null` del host, como dice D03, pero `anden-runtime` monta seis nodos en el `/dev` del contenedor (`null`, `zero`, `full`, `random`, `urandom`, `tty`). No se midió si CRIU sin root necesita ver los otros cinco.
+- La receta de D03 tal cual no basta dentro del agente: el volcado falla por los nodos de `/dev` y por el stdio abierto desde fuera del contenedor (ver RESEARCH). Los seis nodos que liga `anden-runtime` (`null`, `zero`, `full`, `random`, `urandom`, `tty`) pasan como montajes externos de CRIU y se vuelven a ligar desde el `/dev` del host al restaurar, y el contenedor abre `/.anden/stdio.log` y su `/dev/null` dentro de su raíz (anotación `anden.stdio`). C12 y C13 despiertan por `restore`; que la memoria se conserve no lo mide ningún criterio de K3.
 - Si la imagen no trae `/tmp`, `/proc`, `/dev` o `/dev/null`, el volcado los crea en el `upper/` de la instancia, porque son destino de un montaje de la vista.
 - `criu restore` corre dentro de la cgroup de la instancia: su memoria y sus procesos cuentan contra `memory.max` y `pids.max` del servicio. No se midió con qué límites deja de caber.
 - Solo cae a `relaunch` lo que falla antes de que `criu restore` termine bien. Un proceso restaurado que muere después deja la instancia en `FAILED`, como un arranque fallido.

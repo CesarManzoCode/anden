@@ -15,6 +15,7 @@ import (
 	"syscall"
 
 	andenv1 "github.com/CesarManzoCode/anden/gen/anden/v1"
+	ociruntime "github.com/CesarManzoCode/anden/internal/runtime"
 	"github.com/CesarManzoCode/anden/internal/wake"
 )
 
@@ -151,25 +152,45 @@ func restoreView(merged string) []step {
 	}
 }
 
+// deviceMounts are the --external mounts of the device nodes anden-runtime binds
+// from the host /dev. criu cannot dump those binds by itself, because the
+// container has no mount of the devtmpfs they come from: the dump names each one
+// by its mountpoint, mnt[/dev/null]:dev-null, and the restore binds the same
+// host node back, mnt[dev-null]:/dev/null.
+func deviceMounts(restore bool) []string {
+	var args []string
+	for _, name := range ociruntime.DefaultDevices {
+		path, cookie := "/dev/"+name, "dev-"+name
+		if restore {
+			args = append(args, "--external", fmt.Sprintf("mnt[%s]:%s", cookie, path))
+		} else {
+			args = append(args, "--external", fmt.Sprintf("mnt[%s]:%s", path, cookie))
+		}
+	}
+	return args
+}
+
 // dumpArgv runs the copied criu through the copied loader, inside the view.
 func dumpArgv(interp string, pid int, netInode uint64) []string {
-	return []string{
+	argv := []string{
 		viewTools + "/" + interp, "--library-path", viewTools, viewTools + "/criu",
 		"dump", "--network-lock", "skip", "--unprivileged", "--manage-cgroups=ignore",
 		"-t", strconv.Itoa(pid), "-D", viewImages, "--root", "/",
 		"--external", fmt.Sprintf("net[%d]:%s", netInode, extnet),
-		"-o", "dump.log", "-v2",
 	}
+	argv = append(argv, deviceMounts(false)...)
+	return append(argv, "-o", "dump.log", "-v2")
 }
 
 // restoreArgv restores the images onto root, with the netns at netFD.
 func restoreArgv(criu, images, root, pidfile string) []string {
-	return []string{
+	argv := []string{
 		criu, "restore", "--network-lock", "skip", "--unprivileged", "--manage-cgroups=ignore",
 		"-D", images, "--root", root,
 		"--inherit-fd", fmt.Sprintf("fd[%d]:%s", netFD, extnet),
-		"-d", "--pidfile", pidfile, "-o", "restore.log", "-v2",
 	}
+	argv = append(argv, deviceMounts(true)...)
+	return append(argv, "-d", "--pidfile", pidfile, "-o", "restore.log", "-v2")
 }
 
 // requestedRoute is the wake_route of a spec as the instance records it.

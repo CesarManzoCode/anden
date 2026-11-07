@@ -21,6 +21,12 @@ const (
 
 const defaultPath = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
+// StdioAnnotation names a file inside the rootfs that init opens, once in the
+// new root, as stdout and stderr of the process, with the /dev/null of the
+// container as stdin. Streams inherited from create belong to the mounts of
+// the caller, which criu cannot find in the mount namespace of the container.
+const StdioAnnotation = "anden.stdio"
+
 // initConfig is what create sends init through the config pipe.
 type initConfig struct {
 	Spec      *Spec    `json:"spec"`
@@ -99,6 +105,11 @@ func prepareInit() (*initConfig, error) {
 	if err := finalizeRootfs(spec); err != nil {
 		return nil, err
 	}
+	if path := spec.Annotations[StdioAnnotation]; path != "" {
+		if err := reopenStdio(path); err != nil {
+			return nil, fmt.Errorf("annotation %s: %w", StdioAnnotation, err)
+		}
+	}
 	if spec.Hostname != "" {
 		if err := syscall.Sethostname([]byte(spec.Hostname)); err != nil {
 			return nil, fmt.Errorf("sethostname: %w", err)
@@ -115,6 +126,27 @@ func prepareInit() (*initConfig, error) {
 		return nil, fmt.Errorf("setsid: %w", err)
 	}
 	return &c, nil
+}
+
+// reopenStdio makes path, in the new root, the stdout and stderr of init, and
+// /dev/null its stdin.
+func reopenStdio(path string) error {
+	out, err := syscall.Open(path, syscall.O_WRONLY|syscall.O_APPEND|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
+	if err != nil {
+		return fmt.Errorf("open %s: %w", path, err)
+	}
+	defer syscall.Close(out)
+	in, err := syscall.Open("/dev/null", syscall.O_RDONLY|syscall.O_CLOEXEC, 0)
+	if err != nil {
+		return fmt.Errorf("open /dev/null: %w", err)
+	}
+	defer syscall.Close(in)
+	for fd, from := range []int{in, out, out} {
+		if err := syscall.Dup3(from, fd, 0); err != nil {
+			return fmt.Errorf("dup3 onto %d: %w", fd, err)
+		}
+	}
+	return nil
 }
 
 // waitStart blocks until start writes a byte to the FIFO. init holds the

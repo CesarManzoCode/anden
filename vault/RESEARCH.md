@@ -208,6 +208,19 @@ No se ejecutó el servidor DNS ni C11 en esta sesión.
 
 No se ejecutó C13 ni C14 en esta sesión. Que runc y crun funcionen dentro del namespace de usuario y de pid del datacenter, con `nsenter -U -n -p` y un scope delegado propio, es hipótesis: C6 y C3 los corrieron con el prefijo de D09, que crea namespaces nuevos.
 
+## Ruta restore dentro del agente (ejecutado el 6 nov 2026, fixer de k3)
+
+| Fuente | Revisión | Dato usado |
+|---|---|---|
+| `criu --help` | `/usr/bin/criu` 4.2.1 | `--external mnt[MOUNTPOINT]:COOKIE` al volcar y `--external mnt[COOKIE]:ROOT` al restaurar |
+| `dump.log` del agente, servicio `echosvc` con `wake_route = restore` | criu 4.2.1, kernel 7.2.14 | Sin externos, el volcado falla con `mnt: 593:./dev/tty doesn't have a proper root mount`: los nodos que `anden-runtime` liga desde el `/dev` del host no tienen en el contenedor el devtmpfs de donde vienen |
+| El mismo `dump.log` con los seis nodos como `mnt[/dev/<nodo>]:dev-<nodo>` | ídem | Falla con `Can't lookup mount=544 for fd=1 path=.../merged/.anden/stdio.log`: el stdio que el agente abre desde fuera pertenece a un montaje de su namespace, no del contenedor. Si el contenedor lo abre dentro de su raíz (anotación `anden.stdio`), el volcado y la restauración terminan bien |
+| `restore.log` del segundo despertar | ídem | La restauración de un árbol que ya se había restaurado falla con `Unable to mount tmpfs .../dev: Invalid argument`. Sin `/dev` en tmpfs (los nodos se ligan sobre el `/dev` del rootfs) se midieron cuatro despertares seguidos por `restore` |
+
+**[hipótesis]** La causa del `EINVAL` sería que el kernel muestra el `uid=` y `gid=` de un tmpfs en ids del host, y criu vuelve a montar con un uid que el namespace del datacenter no mapea. No se leyó el código del kernel ni se midió.
+
+En todas las corridas, `criu` deja `rlimit: Can't setup RLIMIT_NOFILE for self: Operation not permitted` como error y sigue.
+
 ## Documentación oficial sin revisión fija (consultada el 6 nov 2026)
 
 | Fuente | Dato |

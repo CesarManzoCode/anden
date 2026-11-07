@@ -63,6 +63,14 @@ STEP_TIMEOUT_SECONDS = 60
 INNER_TIMEOUT_SECONDS = 3600
 GONE_TIMEOUT_SECONDS = 5
 PR_SET_CHILD_SUBREAPER = 36
+# The nodes anden-runtime binds from the host /dev. criu takes those binds as external mounts: by mountpoint on dump, and on
+# restore it binds the same host node back.
+DEVICES = ("null", "zero", "full", "random", "urandom", "tty")
+DUMP_DEVICES = " ".join(f'--external "mnt[/dev/{d}]:dev-{d}"' for d in DEVICES)
+RESTORE_DEVICES = [x for d in DEVICES for x in ("--external", f"mnt[dev-{d}]:/dev/{d}")]
+# anden-runtime opens this file of the rootfs as the stdout and stderr of the container, and its /dev/null as stdin, so that
+# criu finds them in the mount namespace of the container (as the agent does).
+STDIO_ANNOTATION = "anden.stdio"
 # Runs before the inner script: keeps the client netns on a file while /proc still shows host pids, then mounts the proc of
 # the pid namespace of the datacenter, which the dump view of D03 needs.
 SETUP_SH = 'set -e\nmount --bind "/proc/$1/ns/net" "$2"\nmount -t proc proc /proc\nshift 2\nexec "$@"\n'
@@ -79,8 +87,8 @@ mount --bind "$img" "$m/tmp/img"
 cp "$criu" "$m/tmp/c/criu"
 while [ $# -gt 0 ]; do cp "$2" "$m/tmp/c/$1"; shift 2; done
 exec chroot "$m" "/tmp/c/$interp" --library-path /tmp/c /tmp/c/criu dump --network-lock skip --unprivileged \\
-  --manage-cgroups=ignore -t "$pid" -D /tmp/img --root / --external "net[$inode]:extnet" -o dump.log -v2
-"""
+  --manage-cgroups=ignore -t "$pid" -D /tmp/img --root / --external "net[$inode]:extnet" DEVICES -o dump.log -v2
+""".replace("DEVICES", DUMP_DEVICES)
 RESTORE_SH = 'set -e\nmount --bind "$1" "$1"\nshift\nexec "$@"\n'
 
 
@@ -126,11 +134,11 @@ def parse_ldd(out):
 
 def config(rootfs, netns, uts=None, ipc=None):
     """The bundle of every external row: echosvc with its own pid and mount namespaces in the prepared netns. With uts and ipc,
-    the container joins those too, as D03 asks of what criu dumps."""
+    the container joins those too, as D03 asks of what criu dumps, and has its stdio opened inside the rootfs."""
     caps = ["CAP_KILL", "CAP_NET_BIND_SERVICE"]
     namespaces = [{"type": "pid"}, {"type": "mount"}, {"type": "network", "path": str(netns)}]
     namespaces += [{"type": "uts", "path": str(uts)}, {"type": "ipc", "path": str(ipc)}] if uts else [{"type": "uts"}, {"type": "ipc"}]
-    return {
+    cfg = {
         "ociVersion": "1.2.0",
         "process": {
             "terminal": False,
@@ -149,6 +157,9 @@ def config(rootfs, netns, uts=None, ipc=None):
         ],
         "linux": {"namespaces": namespaces},
     }
+    if uts:
+        cfg["annotations"] = {STDIO_ANNOTATION: "/.anden/stdio.log"}
+    return cfg
 
 
 class Inner:
@@ -163,7 +174,8 @@ class Inner:
 
     def prepare(self):
         w = self.work
-        run(["mount", "--bind", w, w])
+        # Recursive, so that the bind of the client netns that SETUP_SH left on client.ns stays visible.
+        run(["mount", "--rbind", w, w])
         for f in (self.net, self.uts, self.ipc):
             f.write_bytes(b"")
         run(["unshare", f"--net={self.net}", f"--uts={self.uts}", f"--ipc={self.ipc}", "true"])
@@ -286,7 +298,7 @@ class Inner:
                         ["nsenter", f"--uts={self.uts}", f"--ipc={self.ipc}", "--", "unshare", "--mount", "--", "sh", "-c",
                          RESTORE_SH, "sh", str(self.merged), criu, "restore", "--network-lock", "skip", "--unprivileged",
                          "--manage-cgroups=ignore", "-D", str(images), "--root", str(self.merged),
-                         "--inherit-fd", f"fd[{net_fd}]:extnet", "-d", "--pidfile", str(pidfile), "-o", "restore.log", "-v2"],
+                         "--inherit-fd", f"fd[{net_fd}]:extnet", *RESTORE_DEVICES, "-d", "--pidfile", str(pidfile), "-o", "restore.log", "-v2"],
                         stdin=subprocess.DEVNULL, capture_output=True, text=True, pass_fds=(net_fd,),
                         timeout=STEP_TIMEOUT_SECONDS)
                 finally:
@@ -396,6 +408,8 @@ def main():
         print(f"missing: {missing}", flush=True)
         lib.write_report("c13", {"error": f"missing: {missing}"})
         return 1
+    # The kernel leaves the work directory of the overlay with mode 000; it is ours, so it is opened first.
+    subprocess.run(["chmod", "-R", "u+rwX", str(RAW)], capture_output=True, stdin=subprocess.DEVNULL)
     shutil.rmtree(RAW, ignore_errors=True)
     work = RAW / "work"
     work.mkdir(parents=True)
