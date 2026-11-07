@@ -221,6 +221,7 @@ func (c *instanceControl) Halt() error {
 		unmount(in, in.paths.merged)
 	} else {
 		c.a.release(in)
+		shed(in)
 	}
 	if err := reclaim(in.paths.cgroup); err != nil {
 		log.Printf("instance %s: %v", in.id, err)
@@ -719,6 +720,23 @@ func (a *Agent) release(in *instance) {
 	// asynchronously, and the same instance id takes this name when it wakes.
 	_ = exec.Command("ip", "link", "del", host).Run()
 	unmount(in, p.netNS, p.utsNS, p.ipcNS, p.merged)
+}
+
+// shed removes what a relaunch makes anew: the bundle, the files the namespaces
+// were bound to and the mount point of the rootfs. What a sleep without snapshot
+// keeps is the directory with the upper layer and the work directory, and the
+// empty cgroup, which C7 reads. os.Remove leaves a mount point that is still in
+// use, and never empties a directory.
+func shed(in *instance) {
+	p := in.paths
+	for _, f := range []string{p.netNS, p.utsNS, p.ipcNS, p.merged} {
+		if err := os.Remove(f); err != nil && !errors.Is(err, os.ErrNotExist) {
+			log.Printf("instance %s: %v", in.id, err)
+		}
+	}
+	if err := os.RemoveAll(p.bundle); err != nil {
+		log.Printf("instance %s: %v", in.id, err)
+	}
 }
 
 // unmount detaches each target that is mounted.

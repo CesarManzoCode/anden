@@ -499,3 +499,69 @@ func TestFollowTakesDrainAndIdleOfTheAssignment(t *testing.T) {
 		t.Fatalf("after a failed deploy: drain %v idle %v", in.drain, in.idle)
 	}
 }
+
+// A sleep without snapshot leaves only the directory with the upper layer and the
+// work directory, and the empty cgroup that C7 reads. That the veth and the mounts
+// go needs a datacenter, and C27 is what proves it.
+func TestHaltLeavesOnlyWhatIsDeclared(t *testing.T) {
+	state, cgroupRoot := t.TempDir(), t.TempDir()
+	a := &Agent{cfg: Config{State: state, Runtime: filepath.Join(t.TempDir(), "absent")},
+		intents: map[string]*intent{}, beatNow: make(chan struct{}, 1), instances: map[string]*instance{}}
+	in := &instance{id: "echo-1", service: "echo", generation: 1, routeRequested: routeRelaunch,
+		paths: instancePaths(state, cgroupRoot, "echo", 1, "echo-1"),
+		state: andenv1.InstanceState_INSTANCE_STATE_RUNNING}
+	p := in.paths
+	for _, d := range []string{p.upper, p.work, p.merged, p.bundle, p.cgroup} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	files := map[string]string{
+		filepath.Join(p.upper, "written"):        "kept",
+		filepath.Join(p.bundle, "config.json"):   "{}",
+		p.netNS:                                  "",
+		p.utsNS:                                  "",
+		p.ipcNS:                                  "",
+		filepath.Join(p.cgroup, "cgroup.events"): "populated 0\n",
+		filepath.Join(p.cgroup, "memory.current"): "8192\n",
+		filepath.Join(p.cgroup, "memory.reclaim"): "",
+	}
+	for path, content := range files {
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := (&instanceControl{a: a, in: in}).Halt(); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, gone := range []string{p.bundle, p.netNS, p.utsNS, p.ipcNS, p.merged, p.snapshot} {
+		if _, err := os.Lstat(gone); !os.IsNotExist(err) {
+			t.Errorf("%s survived the sleep: %v", gone, err)
+		}
+	}
+	entries, err := os.ReadDir(p.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var left []string
+	for _, e := range entries {
+		left = append(left, e.Name())
+	}
+	if !slices.Equal(left, []string{"upper", "work"}) {
+		t.Errorf("instance directory holds %q, want upper and work", left)
+	}
+	if raw, err := os.ReadFile(filepath.Join(p.upper, "written")); err != nil || string(raw) != "kept" {
+		t.Errorf("the upper layer must survive: %q, %v", raw, err)
+	}
+	if raw, err := os.ReadFile(filepath.Join(p.cgroup, "memory.reclaim")); err != nil || string(raw) != "8192" {
+		t.Errorf("memory.reclaim = %q, %v", raw, err)
+	}
+	if in.state != andenv1.InstanceState_INSTANCE_STATE_STOPPED || in.pid != 0 || in.hasSnapshot {
+		t.Errorf("after the sleep: state %v, pid %d, snapshot %v", in.state, in.pid, in.hasSnapshot)
+	}
+	if it := a.intents["echo-1"]; it == nil || it.awake {
+		t.Errorf("the sleep must be declared to the control plane: %+v", it)
+	}
+}
