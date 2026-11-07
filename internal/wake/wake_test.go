@@ -33,6 +33,7 @@ type fakeActions struct {
 	haltGate  chan struct{}
 	startGate chan struct{}
 	recorded  chan *Phases
+	observed  []Stats
 }
 
 func (f *fakeActions) note(event string) {
@@ -104,9 +105,37 @@ func (f *fakeActions) Record(phases *Phases) {
 	}
 }
 
+func (f *fakeActions) Observe(stats Stats) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.observed = append(f.observed, stats)
+}
+
+// lastStats is the last Stats the machine gave to Observe.
+func (f *fakeActions) lastStats() Stats {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.observed) == 0 {
+		return Stats{}
+	}
+	return f.observed[len(f.observed)-1]
+}
+
 func (f *fakeActions) Fail(error) {
 	f.failed.Add(1)
 	f.note("fail")
+}
+
+// waitEvent waits for an action the machine takes on another goroutine.
+func waitEvent(t *testing.T, f *fakeActions, event string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for !slices.Contains(f.log(), event) {
+		if time.Now().After(deadline) {
+			t.Fatalf("no %q in %q", event, f.log())
+		}
+		time.Sleep(time.Millisecond)
+	}
 }
 
 // waitState waits for a state the machine reaches on another goroutine.
@@ -220,10 +249,12 @@ type gatedSockets struct {
 	*fakeActions
 	gate    chan struct{}
 	entered chan struct{}
+	once    sync.Once
 }
 
+// LiveSockets stops only the first read: once gate is closed, later ones pass.
 func (g *gatedSockets) LiveSockets() (int, error) {
-	close(g.entered)
+	g.once.Do(func() { close(g.entered) })
 	<-g.gate
 	return g.fakeActions.LiveSockets()
 }
@@ -302,7 +333,8 @@ func TestConnectionDuringSleepingWakesAtTheEnd(t *testing.T) {
 	m := NewMachine(testTarget, f)
 	sleepDone := make(chan error, 1)
 	go func() { sleepDone <- m.Sleep() }()
-	waitState(t, m, Sleeping)
+	// Once Halt began: before it, the connection would abort the sleep.
+	waitEvent(t, f, "halt")
 
 	served := make(chan error, 1)
 	go func() {
@@ -330,6 +362,93 @@ func TestConnectionDuringSleepingWakesAtTheEnd(t *testing.T) {
 	}
 	if got := f.starts.Load(); got != 1 {
 		t.Fatalf("%d wakes", got)
+	}
+	if st := m.Stats(); st.Held != 1 || st.Sleeps != 1 || st.State != Active {
+		t.Fatalf("stats %+v, want one sleep and one held connection", st)
+	}
+	if st := f.lastStats(); st != m.Stats() {
+		t.Fatalf("Observe last saw %+v, the machine has %+v", st, m.Stats())
+	}
+}
+
+func TestConnectionBeforeHaltAbortsTheSleep(t *testing.T) {
+	f := &fakeActions{}
+	gate := make(chan struct{})
+	act := &gatedSockets{fakeActions: f, gate: gate, entered: make(chan struct{})}
+	m := NewMachine(testTarget, act)
+	sleepDone := make(chan error, 1)
+	go func() { sleepDone <- m.Sleep() }()
+	// The target is in the set and the sockets are being read: no dump yet.
+	<-act.entered
+
+	served := make(chan error, 1)
+	go func() {
+		release, err := m.Serve(nil)
+		if err == nil {
+			release()
+		}
+		served <- err
+	}()
+	deadline := time.Now().Add(5 * time.Second)
+	for m.Stats().Held != 1 {
+		if time.Now().After(deadline) {
+			t.Fatalf("stats %+v: the connection was not held", m.Stats())
+		}
+		time.Sleep(time.Millisecond)
+	}
+	close(gate)
+	if err := <-sleepDone; !errors.Is(err, ErrWoken) {
+		t.Fatalf("Sleep = %v, want ErrWoken", err)
+	}
+	if err := <-served; err != nil {
+		t.Fatalf("held connection: %v", err)
+	}
+	want := []string{"hold", "sockets", "release"}
+	if got := f.log(); !slices.Equal(got, want) {
+		t.Fatalf("order %q, want %q: an aborted sleep stops nothing and starts nothing", got, want)
+	}
+	if st := m.Stats(); st.State != Active || st.Sleeps != 1 || st.Held != 1 {
+		t.Fatalf("stats %+v", st)
+	}
+	// The abort leaves nothing pending: the next sleep goes through.
+	if err := m.Sleep(); err != nil {
+		t.Fatalf("Sleep after the abort: %v", err)
+	}
+	if st := m.Stats(); st.State != Asleep || st.Sleeps != 2 || st.Held != 1 {
+		t.Fatalf("stats %+v after the second sleep", st)
+	}
+}
+
+func TestHeldCountsOnlyWhileGoingToSleep(t *testing.T) {
+	f := &fakeActions{}
+	active := NewMachine(testTarget, f)
+	release, err := active.Serve(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	release()
+	if st := active.Stats(); st.Held != 0 || st.Sleeps != 0 {
+		t.Fatalf("stats %+v of an active machine", st)
+	}
+	m := asleepMachine(t, f)
+	f.startGate = make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		release, err := m.Serve(nil)
+		if err == nil {
+			release()
+		}
+		done <- err
+	}()
+	waitState(t, m, Waking)
+	close(f.startGate)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	// Active and Asleep are no transition: a connection that wakes a sleeping
+	// service is the ordinary wake.
+	if st := m.Stats(); st.Held != 0 || st.Sleeps != 1 {
+		t.Fatalf("stats %+v", st)
 	}
 }
 

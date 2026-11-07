@@ -5,7 +5,7 @@
 //
 // Usage:
 //
-//	wakeclient measure --addr HOST:PORT [--path P] [--id ID] [--timeout D]
+//	wakeclient measure --addr HOST:PORT [--path P] [--id ID] [--timeout D] [--retry D]
 //	wakeclient load --addr HOST:PORT --clients N --requests M [--prefix P] [--path P] [--timeout D]
 //	wakeclient sample --addr HOST:PORT [--path P] [--timeout D]
 //
@@ -14,6 +14,12 @@
 // prints one JSON line per request. sample prints the version that answered, as
 // echosvc reports it. They exit with 0, with 1 if a request failed, and with 2
 // if the command line is wrong.
+//
+// With --retry, measure connects again every millisecond while no connection is
+// made, for at most that long, and reports the last attempt: it is for a service
+// that is still starting, with no proxy to hold the connection. Every line has
+// end_ns, CLOCK_MONOTONIC at the end of the request, so that whoever started
+// the service can time it from the start.
 package main
 
 import (
@@ -27,7 +33,9 @@ import (
 	"net/http"
 	"os"
 	"sync"
+	"syscall"
 	"time"
+	"unsafe"
 )
 
 const (
@@ -36,6 +44,7 @@ const (
 	exitFailed     = 1
 	exitUsage      = 2
 	defaultTimeout = 30 * time.Second
+	retryInterval  = time.Millisecond
 )
 
 // result is the line printed for one request. A request that never connected
@@ -46,6 +55,7 @@ type result struct {
 	ClientMS  float64 `json:"client_ms"`
 	LocalPort int     `json:"local_port"`
 	Status    int     `json:"status"`
+	EndNS     int64   `json:"end_ns"`
 	Error     string  `json:"error,omitempty"`
 }
 
@@ -66,9 +76,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 	timeout := flags.Duration("timeout", defaultTimeout, "limit of each request, connect included")
 	var id, prefix *string
 	var clients, requests *int
+	var retry *time.Duration
 	switch cmd {
 	case "measure":
 		id = flags.String("id", "", "X-Request-Id of the request")
+		retry = flags.Duration("retry", 0, "connect again while no connection is made, for at most this long")
 	case "load":
 		prefix = flags.String("prefix", "req", "start of each request id")
 		clients = flags.Int("clients", 0, "concurrent clients")
@@ -87,15 +99,20 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	switch cmd {
 	case "measure":
-		return measure(stdout, stderr, *addr, *path, *id, *timeout)
+		return measure(stdout, stderr, *addr, *path, *id, *timeout, *retry)
 	case "load":
 		return load(stdout, stderr, *addr, *path, *prefix, *clients, *requests, *timeout)
 	}
 	return sample(stdout, stderr, *addr, *path, *timeout)
 }
 
-func measure(stdout, stderr io.Writer, addr, path, id string, timeout time.Duration) int {
+func measure(stdout, stderr io.Writer, addr, path, id string, timeout, retry time.Duration) int {
+	deadline := time.Now().Add(retry)
 	res, _ := request(addr, path, id, timeout)
+	for res.LocalPort == 0 && time.Now().Before(deadline) {
+		time.Sleep(retryInterval)
+		res, _ = request(addr, path, id, timeout)
+	}
 	if err := json.NewEncoder(stdout).Encode(res); err != nil {
 		fmt.Fprintln(stderr, "wakeclient:", err)
 		return exitFailed
@@ -171,6 +188,7 @@ func request(addr, path, id string, timeout time.Duration) (result, []byte) {
 	start := time.Now()
 	body, err := exchange(&res, start, addr, path, id, timeout)
 	res.ClientMS = float64(time.Since(start)) / float64(time.Millisecond)
+	res.EndNS = monotonicNS()
 	if err != nil {
 		res.Error = err.Error()
 		return res, nil
@@ -214,4 +232,15 @@ func exchange(res *result, start time.Time, addr, path, id string, timeout time.
 	defer resp.Body.Close()
 	res.Status = resp.StatusCode
 	return io.ReadAll(resp.Body)
+}
+
+// monotonicNS reads CLOCK_MONOTONIC, the clock of Python's time.monotonic_ns.
+// time.Now keeps a monotonic reading but does not expose its value.
+func monotonicNS() int64 {
+	var ts syscall.Timespec
+	const clockMonotonic = 1
+	if _, _, e := syscall.RawSyscall(syscall.SYS_CLOCK_GETTIME, clockMonotonic, uintptr(unsafe.Pointer(&ts)), 0); e != 0 {
+		return 0
+	}
+	return ts.Nano()
 }

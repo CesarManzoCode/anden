@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 func serve(t *testing.T, handler http.HandlerFunc) string {
@@ -96,6 +97,37 @@ func TestMeasureReportsRefusedConnection(t *testing.T) {
 	rc, out, _ := runArgs("measure", "--addr", addr)
 	res := parseLines(t, out)[0]
 	if rc != exitFailed || res.OK || res.Error == "" || res.LocalPort != 0 {
+		t.Errorf("rc %d, result %+v", rc, res)
+	}
+}
+
+func TestMeasureRetriesUntilTheServiceListens(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := listener.Addr().String()
+	listener.Close()
+	started := make(chan *http.Server, 1)
+	go func() {
+		time.Sleep(30 * time.Millisecond)
+		ln, err := net.Listen("tcp", addr)
+		if err != nil {
+			started <- nil
+			return
+		}
+		server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { fmt.Fprint(w, "up") })}
+		started <- server
+		server.Serve(ln)
+	}()
+	rc, out, _ := runArgs("measure", "--addr", addr, "--retry", "5s")
+	if server := <-started; server != nil {
+		defer server.Close()
+	} else {
+		t.Skip("the port was taken meanwhile")
+	}
+	res := parseLines(t, out)[0]
+	if rc != exitOK || !res.OK || res.EndNS <= 0 {
 		t.Errorf("rc %d, result %+v", rc, res)
 	}
 }

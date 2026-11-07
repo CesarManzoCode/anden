@@ -430,3 +430,30 @@ func TestRecordWakeAppendsOneLinePerWake(t *testing.T) {
 		}
 	}
 }
+
+func TestObserveWritesTransitionsPerService(t *testing.T) {
+	a := &Agent{cfg: Config{State: t.TempDir()}}
+	echo := &instanceControl{a: a, in: &instance{id: "echo-1", service: "echo"}}
+	other := &instanceControl{a: a, in: &instance{id: "other-1", service: "other"}}
+	echo.Observe(wake.Stats{State: wake.Sleeping, Sleeps: 1})
+	other.Observe(wake.Stats{State: wake.Asleep, Sleeps: 3})
+	echo.Observe(wake.Stats{State: wake.Sleeping, Sleeps: 1, Held: 2})
+	raw, err := os.ReadFile(filepath.Join(a.cfg.State, transitionsFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]transitionStats
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("%v: %s", err, raw)
+	}
+	want := map[string]transitionStats{
+		"echo":  {State: "SLEEPING", Sleeps: 1, Held: 2},
+		"other": {State: "ASLEEP", Sleeps: 3},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("transitions.json = %s, want %v", raw, want)
+	}
+	if _, err := os.Stat(filepath.Join(a.cfg.State, transitionsFile+".tmp")); !os.IsNotExist(err) {
+		t.Fatalf("the temporary file stayed: %v", err)
+	}
+}

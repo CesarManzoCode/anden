@@ -5,6 +5,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -44,6 +45,9 @@ const (
 	// wakeEventsFile, in the state of the node, has one line per wake
 	// (contract, section 5).
 	wakeEventsFile = "wake_events.jsonl"
+	// transitionsFile, in the state of the node, has the counters of the
+	// machine of each service, rewritten whole at each change.
+	transitionsFile = "transitions.json"
 )
 
 // Config is the command line of the agent.
@@ -75,6 +79,10 @@ type Agent struct {
 	imageMu sync.Mutex
 	// eventsMu keeps the lines of wake_events.jsonl whole.
 	eventsMu sync.Mutex
+	// statsMu guards stats, the counters of each service by name, and the
+	// writes of transitions.json.
+	statsMu sync.Mutex
+	stats   map[string]transitionStats
 
 	mu sync.Mutex
 	// control and epoch are the registration, for what does not wait for a
@@ -292,6 +300,35 @@ func (a *Agent) recordWake(ev wake.Event) error {
 	return err
 }
 
+// transitionStats is the entry of one service in transitions.json.
+type transitionStats struct {
+	State  string `json:"state"`
+	Sleeps uint64 `json:"sleeps"`
+	Held   uint64 `json:"held"`
+}
+
+// observe keeps the counters of a service and rewrites transitions.json. The
+// file is replaced by a rename, so a reader never finds half of it. A new
+// instance of the service starts its counters again.
+func (a *Agent) observe(service string, st wake.Stats) error {
+	a.statsMu.Lock()
+	defer a.statsMu.Unlock()
+	if a.stats == nil {
+		a.stats = map[string]transitionStats{}
+	}
+	a.stats[service] = transitionStats{State: st.State.String(), Sleeps: st.Sleeps, Held: st.Held}
+	raw, err := json.Marshal(a.stats)
+	if err != nil {
+		return err
+	}
+	path := filepath.Join(a.cfg.State, transitionsFile)
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, append(raw, '\n'), 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
 // snapshot returns what to report, and the value of changes it corresponds to.
 func (a *Agent) snapshot() (uint64, []*andenv1.InstanceReport) {
 	a.mu.Lock()
@@ -452,12 +489,17 @@ func (a *Agent) sendIntents(ctx context.Context, s *session) ([]*intent, error) 
 
 // sleep takes an instance to sleep. It is the only way there: an order from the
 // control plane and the idle signal both end here.
+// A connection that came before the processes stopped aborts the sleep, and the
+// service stays awake as if that connection had woken it.
 func (a *Agent) sleep(in *instance) {
 	err := in.machine.Sleep()
 	if err == nil || errors.Is(err, wake.ErrNotActive) {
 		return
 	}
-	if !errors.Is(err, wake.ErrBusy) {
+	switch {
+	case errors.Is(err, wake.ErrWoken):
+		a.declare(in, true)
+	case !errors.Is(err, wake.ErrBusy):
 		log.Printf("instance %s: sleep: %v", in.id, err)
 	}
 	now := time.Now()

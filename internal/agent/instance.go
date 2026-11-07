@@ -281,6 +281,13 @@ func (c *instanceControl) Record(phases *wake.Phases) {
 	}
 }
 
+// Observe keeps the counters of the machine in transitions.json.
+func (c *instanceControl) Observe(st wake.Stats) {
+	if err := c.a.observe(c.in.service, st); err != nil {
+		log.Printf("instance %s: %s: %v", c.in.id, transitionsFile, err)
+	}
+}
+
 func (c *instanceControl) Ready() {
 	c.a.running(c.in)
 	log.Printf("instance %s: woke at %s", c.in.id, c.in.addr)

@@ -55,6 +55,8 @@ const (
 var (
 	// ErrBusy aborts a sleep: something still uses the service.
 	ErrBusy = errors.New("the service has live connections")
+	// ErrWoken aborts a sleep: a connection or a wake came before Halt.
+	ErrWoken = errors.New("the service was woken before it stopped")
 	// ErrNotActive refuses a sleep from any state but Active.
 	ErrNotActive = errors.New("the service is not active")
 	// ErrUnavailable tells a held connection that the service will not wake.
@@ -87,6 +89,20 @@ type Actions interface {
 	// the first byte of its connection or, if no connection woke the service,
 	// as soon as it is Active.
 	Record(phases *Phases)
+	// Observe receives the counters at each change of state and each held
+	// connection. The Machine holds its lock while calling it, so it must not
+	// call back into the Machine.
+	Observe(stats Stats)
+}
+
+// Stats are the counters of a machine, for whoever measures it from outside.
+type Stats struct {
+	State State
+	// Sleeps counts the sleeps begun from Active, aborted ones included.
+	Sleeps uint64
+	// Held counts the connections the proxy held while the service was going
+	// to sleep: they wait for the end of the sleep, or for its abort.
+	Held uint64
 }
 
 // Machine is the state of one service. Every path to sleep or to wake goes
@@ -114,6 +130,9 @@ type Machine struct {
 	conns int
 	// changed is closed and replaced at each change of state.
 	changed chan struct{}
+	// sleeps and heldSleeping are the counters of Stats.
+	sleeps       uint64
+	heldSleeping uint64
 }
 
 func newMachine(target netip.AddrPort, act Actions, state State) *Machine {
@@ -148,11 +167,23 @@ func (m *Machine) State() State {
 	return m.state
 }
 
+// Stats returns the counters now.
+func (m *Machine) Stats() Stats {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.statsLocked()
+}
+
+func (m *Machine) statsLocked() Stats {
+	return Stats{State: m.state, Sleeps: m.sleeps, Held: m.heldSleeping}
+}
+
 // setLocked changes the state and wakes whoever waits for a change.
 func (m *Machine) setLocked(state State) {
 	m.state = state
 	close(m.changed)
 	m.changed = make(chan struct{})
+	m.act.Observe(m.statsLocked())
 }
 
 // Sleep takes the service to Asleep in the order that loses no connection: from
@@ -160,12 +191,16 @@ func (m *Machine) setLocked(state State) {
 // so once a later read of the sockets finds nothing, nothing can arrive at the
 // service. A live socket takes the target out of the set again and returns
 // ErrBusy with the service untouched; what the proxy held meanwhile is served.
+// A connection held before Halt, which is where the dump of the restore route
+// runs, aborts the sleep the same way with ErrWoken. One held once Halt began
+// waits for it to end and wakes the service.
 func (m *Machine) Sleep() error {
 	m.mu.Lock()
 	if m.state != Active {
 		m.mu.Unlock()
 		return ErrNotActive
 	}
+	m.sleeps++
 	m.setLocked(Sleeping)
 	m.mu.Unlock()
 
@@ -180,10 +215,14 @@ func (m *Machine) Sleep() error {
 	time.Sleep(settleDelay)
 	live, err := m.act.LiveSockets()
 	m.mu.Lock()
-	conns := m.conns
+	conns, woken := m.conns, m.pending
 	m.mu.Unlock()
-	if err == nil && (live > 0 || conns > 0) {
+	switch {
+	case err != nil:
+	case live > 0 || conns > 0:
 		err = ErrBusy
+	case woken:
+		err = ErrWoken
 	}
 	if err != nil {
 		if rerr := m.act.Release(m.target); rerr != nil {
@@ -355,6 +394,7 @@ func (m *Machine) Serve(done <-chan struct{}) (func(), error) {
 // whether the connection owns the wake it waited for: then the caller marks its
 // first byte and records it.
 func (m *Machine) ServeWake(done <-chan struct{}, phases *Phases) (func(), bool, error) {
+	counted := false
 	for {
 		m.mu.Lock()
 		switch m.state {
@@ -365,6 +405,12 @@ func (m *Machine) ServeWake(done <-chan struct{}, phases *Phases) (func(), bool,
 		case Failed, Closed:
 			m.mu.Unlock()
 			return nil, false, ErrUnavailable
+		case Sleeping:
+			if !counted {
+				counted = true
+				m.heldSleeping++
+				m.act.Observe(m.statsLocked())
+			}
 		}
 		m.wakeLocked(phases)
 		changed := m.changed

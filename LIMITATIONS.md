@@ -68,6 +68,18 @@ Fuente única de lo que Andén no demuestra. Ningún otro archivo los repite.
 - La vigencia de un nodo vive en la memoria de `andend`, con su reloj monótono. Tras reiniciar `andend`, un nodo del que no se supo nada cuenta como visto en el arranque, así que se declara muerto 4 s después y no antes.
 - `GetService` y `ListServices` leen todas las instancias reportadas para armar la respuesta. No está medido cuánto cuesta eso con muchos servicios.
 
+## Despertar
+
+- Una conexión retenida después de que empezó a pararse el servicio (en la ruta `restore`, durante el volcado) no aborta el sueño: espera a que termine y a un despertar completo.
+- Los contadores de `transitions.json` son por instancia: una instancia nueva del mismo servicio (despliegue, movimiento) los empieza de cero. El archivo no se borra al borrar el servicio.
+- En C14 el retardo se mide desde que el nodo empieza el sueño, visto en `transitions.json`, no desde `SleepService`, que solo cambia el estado deseado. Arrancar `wakeclient` le suma unos milisegundos no medidos a cada retardo.
+
+## Comparaciones
+
+- En C13 las filas `runc`, `crun` y `criu-restore` corren sin límites de cgroup ni seccomp y sin proxy, sobre un overlay de una sola capa con `echosvc`; las de Andén tienen 1000 milicores y 128 MiB. Su reloj empieza antes de `create` o de `criu restore`, y el de Andén antes de `connect()`.
+- La fila `criu-restore` lanza el contenedor con `anden-runtime` antes del volcado: el volcado y la restauración son directos, el arranque inicial no.
+- Las filas sin proxy se miden reintentando la conexión cada milisegundo: esa granularidad entra en la muestra.
+
 ## Instancias
 
 - Un volumen es un directorio del nodo, `nodes/nodeN/volumes/<nombre>/`, montado con bind. Lo comparten los servicios del mismo nodo que usen ese nombre, sobrevive a dormir y despertar, no tiene cuota, no se borra con el servicio y no sigue a un servicio que cambie de nodo.

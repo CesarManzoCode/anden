@@ -195,6 +195,19 @@ Que los netns del datacenter compartan ese reloj con el host se razonó (no se c
 
 No se ejecutó el servidor DNS ni C11 en esta sesión.
 
+## Carrera y comparación (consultado el 6 nov 2026 para k3-04)
+
+| Fuente | Revisión | Dato usado |
+|---|---|---|
+| `crun --help`, `crun kill --help`, `crun delete --help` | `/usr/bin/crun` 1.30.1 | `--root=DIR` global; `kill CONTAINER [SIGNAL]`; `delete -f, --force` |
+| `nsenter --help` | util-linux 2.42.4 | `-u, --uts[=<file>]`, `-i, --ipc[=<file>]`, `-n, --net[=<file>]` entran a un namespace por archivo; `-t`, `--preserve-credentials` |
+| `unshare --help` | util-linux 2.42.4 | `-m, --mount`; `--propagation` (privada por defecto, ver arriba) |
+| `chroot --help` | coreutils (sistema) | `chroot NEWROOT [COMMAND [ARG]...]`; cambia a `/` salvo con `--skip-chdir` |
+| `/usr/include/linux/prctl.h` | cabeceras instaladas | `PR_SET_CHILD_SUBREAPER 36` |
+| `criu --version` | `/usr/bin/criu` 4.2.1 | La versión de la receta de D03 |
+
+No se ejecutó C13 ni C14 en esta sesión. Que runc y crun funcionen dentro del namespace de usuario y de pid del datacenter, con `nsenter -U -n -p` y un scope delegado propio, es hipótesis: C6 y C3 los corrieron con el prefijo de D09, que crea namespaces nuevos.
+
 ## Documentación oficial sin revisión fija (consultada el 6 nov 2026)
 
 | Fuente | Dato |

@@ -68,6 +68,10 @@
 - `andend` responde DNS en `10.80.0.1:53`, por UDP y TCP: `<servicio>.anden.internal` da un registro A con TTL 1 hacia la dirección del servicio, despierto o dormido, y cualquier otro nombre da NXDOMAIN.
 - `MoveService` duerme el servicio si estaba despierto, le da una dirección del nodo destino y lo deja dormido allí: el borde, el DNS y el set `sleeping` de ambos nodos siguen la dirección nueva, y el siguiente despertar ocurre en el nodo destino. `GetService` muestra el nodo y la dirección de un servicio dormido.
 - Criterio de aceptación C11 (`acceptance/c11_discovery.py`).
+- Una conexión que llega mientras un servicio se duerme queda retenida y se atiende. Si llega antes de que paren sus procesos (antes del volcado de CRIU en la ruta `restore`), el sueño se aborta y el servicio sigue despierto; si llega después, espera a que termine y lo despierta.
+- Cada nodo escribe `nodes/nodeN/transitions.json` con el estado de cada servicio en el nodo, los sueños empezados (`sleeps`) y las conexiones retenidas mientras se dormía (`held`).
+- `wakeclient measure --retry D` vuelve a conectar cada milisegundo mientras no haya conexión, y cada línea de `wakeclient` lleva `end_ns` en `CLOCK_MONOTONIC`.
+- Criterios de aceptación C13 (`acceptance/c13_compare.py`) y C14 (`acceptance/c14_race.py`).
 
 ### Decisiones
 
