@@ -219,3 +219,6 @@ Fuente única de lo que Andén no demuestra. Ningún otro archivo los repite.
 ## Sin demostrar todavía
 
 Todo lo que sigue a K4: observabilidad, densidad y construcción limpia. Esta sección se reduce conforme cada K cierre.
+
+- C28 clona solo lo que está en `HEAD`: no ve cambios sin commit. Comparte con el repositorio original `ANDEN_CACHE`, la caché de módulos y la de compilación de Go, así que no demuestra que las imágenes, runtime-tools ni los módulos se puedan traer desde cero ni sin red. Hereda el entorno de quien lo corre, salvo `ANDEN_ACCEPT_SKIP` y `ANDEN_CACHE`.
+- C29 cuenta el árbol de trabajo con cloc, no lo versionado: un archivo sin commit dentro de las rutas de `acceptance/loc_paths.txt` entra en la cuenta. La prueba de Go que revisa esas rutas vive en `acceptance/loc_paths_test.go`, un archivo que la tabla de rutas del contrato no lista en `acceptance/`; no suma líneas porque cloc excluye `*_test.go`.

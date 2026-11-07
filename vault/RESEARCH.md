@@ -244,6 +244,14 @@ En esta sesión no se ejecutó `tc qdisc replace` ni `tc qdisc del`: lo ejecutad
 
 No se ejecutó `promtool` sobre `ops/` ni sobre la salida de `/metrics` en esta sesión: lo hacen C23 y C24 al cerrar el K. La comparación exacta de `exp_annotations` y que `alertname` no haga falta en `exp_labels` viene de la página de pruebas de reglas, sin ejecutar.
 
+## Construcción limpia y proporción (consultado el 7 nov 2026 para k5-03)
+
+| Fuente | Revisión | Dato usado |
+|---|---|---|
+| `cloc --help` y `cloc --json --quiet` ejecutado sobre el árbol | cloc 2.10 | Con `--fullpath`, `--not-match-d` y `--not-match-f` comparan la ruta relativa al directorio desde el que se invoca. `--not-match-d='^internal/sim(/\|$)'` sobre `cmd internal` dio 9312 líneas de código, y `internal/sim` solo 897: suman las 10209 de `cmd internal` sin exclusión. `--not-match-f='_test\.go$'` sigue funcionando con `--fullpath`. La salida JSON trae `header`, una clave por lenguaje y `SUM` con `blank`, `comment`, `code` y `nFiles`; los `.txt` cuentan como `Text` |
+| `git clone -h` | git del sistema | `git clone [<options>] [--] <repo> [<dir>]`; un repositorio local se clona por ruta |
+| `unshare --help` | util-linux del sistema | `-U --map-root-user --map-auto`, ya usados por `lib.NS_PREFIX`; C28 los usa para borrar un clon con archivos de ids subordinados o modo 000. No se ejecutó ese borrado |
+
 ## Documentación oficial sin revisión fija (consultada el 6 nov 2026)
 
 | Fuente | Dato |

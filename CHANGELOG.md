@@ -8,9 +8,11 @@
 - `ops/alerts.yml` con `AndenNodeDown` y `AndenWakeOverBudget` (p99 de despertar sobre 1 s), sus pruebas en `ops/alerts_test.yml` y un runbook por alerta en `ops/runbooks/`.
 - Criterios de aceptación C23 (`acceptance/c23_metrics.py`), C24 (`acceptance/c24_alerts.py`) y C25 (`acceptance/c25_runbooks.py`).
 - Criterio de aceptación C26 (`acceptance/c26_density.py`): banco de densidad con 10 a 1000 servicios dormidos, que escribe `c26/curve.csv`.
+- Criterios de aceptación C28 (`acceptance/c28_clean_build.py`), que corre `make check && make accept` en un clon limpio, y C29 (`acceptance/c29_ratio.py`), que compara con cloc el código de apoyo contra el de producto según las rutas de `acceptance/loc_paths.txt`.
 
 ### Cambiado
 
+- `make check` ya no revisa el formato de los `.go` bajo `.run/`, donde C28 deja su clon.
 - Un servicio que duerme sin snapshot ya no deja en su directorio el bundle, los archivos de sus namespaces ni el punto de montaje del rootfs: solo `upper/` y `work/`. El despertar por `relaunch` los vuelve a crear.
 
 ## K4: colocación, rollouts, caída y partición (2026-11-07)
