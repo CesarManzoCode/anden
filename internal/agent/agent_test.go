@@ -1,0 +1,567 @@
+package agent
+
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"reflect"
+	"slices"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+
+	"google.golang.org/protobuf/proto"
+
+	andenv1 "github.com/CesarManzoCode/anden/gen/anden/v1"
+	"github.com/CesarManzoCode/anden/internal/image"
+	ociruntime "github.com/CesarManzoCode/anden/internal/runtime"
+	"github.com/CesarManzoCode/anden/internal/wake"
+)
+
+func testSpec() *andenv1.ServiceSpec {
+	return &andenv1.ServiceSpec{Name: "echo", Port: 8080, CpuMillis: 500, MemoryMib: 64, PidsMax: 32,
+		Env: map[string]string{"VERSION": "v1", "B": "2"}, IdleSeconds: proto.Uint32(0)}
+}
+
+func testInput() configInput {
+	return configInput{
+		spec:   testSpec(),
+		run:    image.RunConfig{Cmd: []string{"/usr/bin/echosvc"}, Env: []string{"PATH=/bin", "VERSION=image", "A=1"}},
+		rootfs: "/s/instances/echo-1/merged",
+		netNS:  "/s/instances/echo-1/net.ns",
+		utsNS:  "/s/instances/echo-1/uts.ns",
+		ipcNS:  "/s/instances/echo-1/ipc.ns",
+		cgroup: "/sys/fs/cgroup/x/anden-h.scope/dc/node1/svc-echo-1",
+	}
+}
+
+func parseConfig(t *testing.T, in configInput) *ociruntime.Spec {
+	t.Helper()
+	config, err := buildConfig(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// What the runtime itself accepts is the test of validity.
+	parsed, err := ociruntime.ParseSpec(raw)
+	if err != nil {
+		t.Fatalf("anden-runtime refuses the config: %v\n%s", err, raw)
+	}
+	return parsed
+}
+
+func TestBuildConfigMountsVolumes(t *testing.T) {
+	in := testInput()
+	in.volumes = "/s/volumes"
+	in.spec.Volumes = []*andenv1.Volume{{Name: "data", MountPath: "/var/data"}}
+	c := parseConfig(t, in)
+	last := c.Mounts[len(c.Mounts)-1]
+	if last.Destination != "/var/data" || last.Source != "/s/volumes/data" || last.Type != "bind" {
+		t.Errorf("mount %+v", last)
+	}
+}
+
+func TestBuildConfigLimitsAndNamespaces(t *testing.T) {
+	c := parseConfig(t, testInput())
+	r := c.Linux.Resources
+	if *r.Memory.Limit != 64<<20 {
+		t.Errorf("memory limit %d", *r.Memory.Limit)
+	}
+	if *r.CPU.Quota != 50000 || *r.CPU.Period != 100000 {
+		t.Errorf("cpu %d / %d", *r.CPU.Quota, *r.CPU.Period)
+	}
+	if *r.Pids.Limit != 32 {
+		t.Errorf("pids %d", *r.Pids.Limit)
+	}
+	if c.Linux.CgroupsPath != "/x/anden-h.scope/dc/node1/svc-echo-1" {
+		t.Errorf("cgroupsPath %s", c.Linux.CgroupsPath)
+	}
+	want := []ociruntime.Namespace{{Type: "pid"}, {Type: "mount"}, {Type: "network", Path: "/s/instances/echo-1/net.ns"},
+		{Type: "uts", Path: "/s/instances/echo-1/uts.ns"}, {Type: "ipc", Path: "/s/instances/echo-1/ipc.ns"}}
+	if !reflect.DeepEqual(c.Linux.Namespaces, want) {
+		t.Errorf("namespaces %+v", c.Linux.Namespaces)
+	}
+	if c.Root.Path != "/s/instances/echo-1/merged" || c.Hostname != "echo" || !c.Process.NoNewPrivileges || c.Process.Cwd != "/" {
+		t.Errorf("config %+v %+v", c.Root, c.Process)
+	}
+	if slices.Contains(c.Process.Capabilities.Bounding, "CAP_SYS_ADMIN") {
+		t.Error("an instance must not keep CAP_SYS_ADMIN")
+	}
+}
+
+func TestBuildConfigWithoutPidsLimit(t *testing.T) {
+	in := testInput()
+	in.spec.PidsMax = 0
+	if c := parseConfig(t, in); c.Linux.Resources.Pids != nil {
+		t.Errorf("pids_max 0 means no limit, got %+v", c.Linux.Resources.Pids)
+	}
+}
+
+func TestBuildConfigSeccompByRoute(t *testing.T) {
+	c := parseConfig(t, testInput())
+	if c.Linux.Seccomp == nil || !slices.Contains(c.Linux.Seccomp.Syscalls[0].Names, "mount") {
+		t.Fatalf("relaunch needs its filter: %+v", c.Linux.Seccomp)
+	}
+	in := testInput()
+	in.spec.WakeRoute = andenv1.WakeRoute_WAKE_ROUTE_RESTORE
+	if c := parseConfig(t, in); c.Linux.Seccomp != nil {
+		t.Errorf("restore runs without a filter (D19): %+v", c.Linux.Seccomp)
+	}
+	if seccompEnabled(in.spec) || !seccompEnabled(testSpec()) {
+		t.Error("seccompEnabled does not follow the route")
+	}
+}
+
+func TestBuildConfigDevAndStdioByRoute(t *testing.T) {
+	devTmpfs := func(c *ociruntime.Spec) bool {
+		return slices.ContainsFunc(c.Mounts, func(m ociruntime.Mount) bool { return m.Destination == "/dev" })
+	}
+	c := parseConfig(t, testInput())
+	if !devTmpfs(c) {
+		t.Errorf("relaunch mounts a tmpfs on /dev: %+v", c.Mounts)
+	}
+	in := testInput()
+	in.spec.WakeRoute = andenv1.WakeRoute_WAKE_ROUTE_RESTORE
+	r := parseConfig(t, in)
+	if devTmpfs(r) {
+		t.Errorf("restore keeps /dev in the rootfs, criu cannot restore a tmpfs twice: %+v", r.Mounts)
+	}
+	for _, s := range []*ociruntime.Spec{c, r} {
+		if s.Annotations[ociruntime.StdioAnnotation] != "/.anden/stdio.log" {
+			t.Errorf("stdio annotation %v", s.Annotations)
+		}
+	}
+}
+
+func TestProcessArgs(t *testing.T) {
+	run := image.RunConfig{Entrypoint: []string{"/e"}, Cmd: []string{"c"}}
+	if got, _ := processArgs(run, nil); !reflect.DeepEqual(got, []string{"/e", "c"}) {
+		t.Errorf("entrypoint and cmd: %q", got)
+	}
+	if got, _ := processArgs(run, []string{"a"}); !reflect.DeepEqual(got, []string{"/e", "a"}) {
+		t.Errorf("args replace cmd: %q", got)
+	}
+	if _, err := processArgs(image.RunConfig{}, nil); err == nil {
+		t.Error("nothing to run must fail")
+	}
+}
+
+func TestProcessEnv(t *testing.T) {
+	run := image.RunConfig{Env: []string{"PATH=/bin", "VERSION=image", "A=1"}}
+	got := processEnv(run, map[string]string{"VERSION": "v1", "B": "2"})
+	if want := []string{"PATH=/bin", "A=1", "B=2", "VERSION=v1"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("env %q, want %q", got, want)
+	}
+	if got := processEnv(image.RunConfig{}, nil); !reflect.DeepEqual(got, []string{defaultPath}) {
+		t.Errorf("default PATH: %q", got)
+	}
+}
+
+func TestNetworkCommands(t *testing.T) {
+	host, peer := vethNames("a-service-with-a-very-long-name-12")
+	if len(host) > 15 || len(peer) > 15 || host == peer {
+		t.Fatalf("veth names %q %q", host, peer)
+	}
+	if other, _ := vethNames("another-1"); other == host {
+		t.Fatal("two instances share a veth name")
+	}
+	if got := hostBatch("vh1", "vc1", "/s/net.ns"); !reflect.DeepEqual(got, []string{
+		"link add vh1 type veth peer name vc1",
+		"link set vc1 netns /s/net.ns",
+		"link set vh1 master svc0",
+		"link set vh1 up",
+	}) {
+		t.Errorf("hostBatch %q", got)
+	}
+	if got := instanceBatch("vc1", "02:00:0a:51:00:02", "10.81.0.2", 16, "10.81.0.1"); !reflect.DeepEqual(got, []string{
+		"link set lo up",
+		"link set vc1 name eth0",
+		"link set eth0 address 02:00:0a:51:00:02",
+		"link set eth0 addrgenmode none",
+		"addr add 10.81.0.2/16 dev eth0",
+		"link set eth0 up",
+		"route add default via 10.81.0.1",
+	}) {
+		t.Errorf("instanceBatch %q", got)
+	}
+	if got := namespaceArgs("/n", "/u", "/i"); !reflect.DeepEqual(got, []string{"--net=/n", "--uts=/u", "--ipc=/i", "true"}) {
+		t.Errorf("namespaceArgs %q", got)
+	}
+}
+
+func TestMacOf(t *testing.T) {
+	if got, err := macOf("10.81.0.2"); err != nil || got != "02:00:0a:51:00:02" {
+		t.Errorf("macOf = %q, %v", got, err)
+	}
+	for _, bad := range []string{"", "fe80::1", "10.81.0"} {
+		if got, err := macOf(bad); err == nil {
+			t.Errorf("macOf(%q) = %q", bad, got)
+		}
+	}
+}
+
+func assignment(service string, generation uint64, awake bool) *andenv1.Assignment {
+	return &andenv1.Assignment{
+		InstanceId: service + "-" + strconv.FormatUint(generation, 10),
+		Spec:       &andenv1.ServiceSpec{Name: service},
+		Generation: generation,
+		Awake:      awake,
+	}
+}
+
+func atAddr(as *andenv1.Assignment, addr string) *andenv1.Assignment {
+	as.Addr = addr
+	return as
+}
+
+func TestDiff(t *testing.T) {
+	cases := []struct {
+		name      string
+		desired   []*andenv1.Assignment
+		have      map[string]local
+		wantStart []string
+		wantStop  []string
+	}{
+		{"nothing", nil, nil, nil, nil},
+		{"new assignment starts", []*andenv1.Assignment{assignment("a", 1, true)}, nil, []string{"a-1"}, nil},
+		{"present stays", []*andenv1.Assignment{assignment("a", 1, true)}, map[string]local{"a-1": {service: "a"}}, nil, nil},
+		{"asleep does not start", []*andenv1.Assignment{assignment("a", 1, false)}, nil, nil, nil},
+		{"sleep stops", []*andenv1.Assignment{assignment("a", 1, false)}, map[string]local{"a-1": {service: "a"}}, nil, []string{"a-1"}},
+		{"unassigned stops", nil, map[string]local{"a-1": {service: "a"}}, nil, []string{"a-1"}},
+		{"stopping is not stopped twice", nil, map[string]local{"a-1": {service: "a", stopping: true}}, nil, nil},
+		{"new generation waits for the old to go", []*andenv1.Assignment{assignment("a", 2, true)},
+			map[string]local{"a-1": {service: "a"}}, nil, []string{"a-1"}},
+		{"new generation still waits while it stops", []*andenv1.Assignment{assignment("a", 2, true)},
+			map[string]local{"a-1": {service: "a", stopping: true}}, nil, nil},
+		{"other services do not interfere", []*andenv1.Assignment{assignment("a", 1, true), assignment("b", 1, true)},
+			map[string]local{"a-1": {service: "a"}}, []string{"b-1"}, nil},
+		{"a deploy starts the new instance beside the old one", []*andenv1.Assignment{assignment("a", 1, true), atAddr(assignment("a", 2, true), "10.81.0.3")},
+			map[string]local{"a-1": {service: "a"}}, []string{"a-2"}, nil},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			start, stop := diff(c.desired, c.have)
+			var ids []string
+			for _, as := range start {
+				ids = append(ids, as.GetInstanceId())
+			}
+			if !slices.Equal(ids, c.wantStart) || !slices.Equal(stop, c.wantStop) {
+				t.Fatalf("start %q stop %q, want %q %q", ids, stop, c.wantStart, c.wantStop)
+			}
+		})
+	}
+}
+
+func TestDormant(t *testing.T) {
+	cases := []struct {
+		name    string
+		desired []*andenv1.Assignment
+		have    map[string]local
+		want    []string
+	}{
+		{"nothing", nil, nil, nil},
+		{"asleep and unknown takes its place", []*andenv1.Assignment{assignment("a", 1, false)}, nil, []string{"a-1"}},
+		{"awake is not dormant", []*andenv1.Assignment{assignment("a", 1, true)}, nil, nil},
+		{"already here", []*andenv1.Assignment{assignment("a", 1, false)}, map[string]local{"a-1": {service: "a"}}, nil},
+		{"waits for the previous generation", []*andenv1.Assignment{assignment("a", 2, false)},
+			map[string]local{"a-1": {service: "a", stopping: true}}, nil},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var ids []string
+			for _, as := range dormant(c.desired, c.have) {
+				ids = append(ids, as.GetInstanceId())
+			}
+			if !slices.Equal(ids, c.want) {
+				t.Fatalf("dormant %q, want %q", ids, c.want)
+			}
+		})
+	}
+}
+
+func TestSleepAction(t *testing.T) {
+	const (
+		running  = andenv1.InstanceState_INSTANCE_STATE_RUNNING
+		starting = andenv1.InstanceState_INSTANCE_STATE_STARTING
+		stopped  = andenv1.InstanceState_INSTANCE_STATE_STOPPED
+		failed   = andenv1.InstanceState_INSTANCE_STATE_FAILED
+	)
+	cases := []struct {
+		name      string
+		mustSleep bool
+		machine   wake.State
+		state     andenv1.InstanceState
+		want      action
+	}{
+		{"unassigned stops", false, wake.Active, running, actionStop},
+		{"unassigned stops even asleep", false, wake.Asleep, stopped, actionStop},
+		{"running sleeps", true, wake.Active, running, actionSleep},
+		{"sleeping waits", true, wake.Sleeping, running, actionNone},
+		{"asleep stays", true, wake.Asleep, stopped, actionNone},
+		{"waking waits", true, wake.Waking, starting, actionNone},
+		{"first start stops", true, wake.Active, starting, actionStop},
+		{"died stops", true, wake.Active, failed, actionStop},
+		{"failed wake stops", true, wake.Failed, failed, actionStop},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := sleepAction(c.mustSleep, c.machine, c.state); got != c.want {
+				t.Fatalf("sleepAction = %d, want %d", got, c.want)
+			}
+		})
+	}
+}
+
+func TestEffectiveAndDeclare(t *testing.T) {
+	a := &Agent{intents: map[string]*intent{}, beatNow: make(chan struct{}, 1),
+		desired: []*andenv1.Assignment{assignment("a", 1, false), assignment("b", 1, true)}}
+	in := &instance{id: "a-1", service: "a", generation: 1}
+	a.declare(in, false)
+	if len(a.intents) != 0 {
+		t.Fatalf("what the control plane already says is no intent: %+v", a.intents)
+	}
+	a.declare(in, true)
+	if it := a.intents["a-1"]; it == nil || !it.awake || it.service != "a" || it.generation != 1 {
+		t.Fatalf("intent %+v", it)
+	}
+	if len(a.beatNow) != 1 {
+		t.Error("an intent must ask for a heartbeat")
+	}
+	got := a.effective()
+	if !got[0].GetAwake() || !got[1].GetAwake() {
+		t.Fatalf("effective %+v", got)
+	}
+	if a.desired[0].GetAwake() {
+		t.Fatal("effective changed what the control plane sent")
+	}
+	// A pending intent is replaced even when the new one matches desired.
+	a.declare(in, false)
+	if it := a.intents["a-1"]; it == nil || it.awake {
+		t.Fatalf("intent %+v", it)
+	}
+}
+
+func TestFirstProcess(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "cgroup.procs"), []byte("41\n42\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if pid, err := firstProcess(dir); err != nil || pid != 41 {
+		t.Fatalf("firstProcess = %d, %v", pid, err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "cgroup.procs"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if pid, err := firstProcess(dir); err == nil {
+		t.Fatalf("an empty cgroup has no process, got %d", pid)
+	}
+}
+
+func TestInstancePaths(t *testing.T) {
+	p := instancePaths("/s/nodes/node1", "/sys/fs/cgroup/x/dc/node1", "echo", 3, "echo-3")
+	if p.dir != filepath.Join("/s/nodes/node1", "instances", "echo-3") || !strings.HasSuffix(p.merged, "echo-3/merged") ||
+		!strings.HasSuffix(p.netNS, "echo-3/net.ns") || p.cgroup != "/sys/fs/cgroup/x/dc/node1/svc-echo-3" {
+		t.Fatalf("%+v", p)
+	}
+}
+
+func TestParsePopulated(t *testing.T) {
+	if !parsePopulated([]byte("populated 1\nfrozen 0\n")) || parsePopulated([]byte("populated 0\nfrozen 0\n")) {
+		t.Fatal("populated misread")
+	}
+}
+
+func TestPrepareRootfsDoesNotFollowLinks(t *testing.T) {
+	merged := t.TempDir()
+	stdio, err := prepareRootfs(merged, "10.80.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stdio.Close()
+	raw, err := os.ReadFile(filepath.Join(merged, "etc", "resolv.conf"))
+	if err != nil || string(raw) != "nameserver 10.80.0.1\n" {
+		t.Fatalf("resolv.conf %q, %v", raw, err)
+	}
+
+	outside := t.TempDir()
+	other := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(other, "etc")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := prepareRootfs(other, "10.80.0.1"); err == nil {
+		t.Fatal("/etc as a symlink must be refused")
+	}
+}
+
+// Asks for all of memory.current. That the kernel's EAGAIN does not block needs a
+// real cgroup, and C7 is what proves it.
+func TestReclaimAsksForAllTheMemory(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "memory.current"), []byte("4096\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "memory.reclaim"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := reclaim(dir); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(filepath.Join(dir, "memory.reclaim"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "4096" {
+		t.Fatalf("memory.reclaim = %q", got)
+	}
+}
+
+func TestRecordWakeAppendsOneLinePerWake(t *testing.T) {
+	a := &Agent{cfg: Config{State: t.TempDir()}}
+	in := &instance{id: "echo-1", service: "echo", route: routeRestore, routeRequested: routeRestore}
+	control := &instanceControl{a: a, in: in}
+	for _, client := range []string{"10.80.0.100:40112", "10.80.0.100:40113"} {
+		phases := wake.NewPhases(client)
+		for _, ph := range []wake.Phase{wake.Detection, wake.Placement, wake.Rootfs, wake.Network, wake.Start, wake.Readiness, wake.FirstByte} {
+			phases.Mark(ph)
+		}
+		control.Record(phases)
+	}
+	raw, err := os.ReadFile(filepath.Join(a.cfg.State, wakeEventsFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSuffix(string(raw), "\n"), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("%d lines: %q", len(lines), raw)
+	}
+	for i, line := range lines {
+		var ev map[string]any
+		if err := json.Unmarshal([]byte(line), &ev); err != nil {
+			t.Fatal(err)
+		}
+		if ev["service"] != "echo" || ev["route"] != routeRestore || ev["route_requested"] != routeRestore ||
+			ev["client_addr"] != "10.80.0.100:4011"+strconv.Itoa(2+i) {
+			t.Fatalf("line %d: %s", i, line)
+		}
+		phases, _ := ev["phases_ms"].(map[string]any)
+		keys := make([]string, 0, len(phases))
+		for k := range phases {
+			keys = append(keys, k)
+		}
+		slices.Sort(keys)
+		want := []string{"detection", "first_byte", "network", "placement", "readiness", "rootfs", "start"}
+		if !reflect.DeepEqual(keys, want) {
+			t.Fatalf("phases_ms keys %v, want %v", keys, want)
+		}
+	}
+}
+
+func TestObserveWritesTransitionsPerService(t *testing.T) {
+	a := &Agent{cfg: Config{State: t.TempDir()}}
+	echo := &instanceControl{a: a, in: &instance{id: "echo-1", service: "echo"}}
+	other := &instanceControl{a: a, in: &instance{id: "other-1", service: "other"}}
+	echo.Observe(wake.Stats{State: wake.Sleeping, Sleeps: 1})
+	other.Observe(wake.Stats{State: wake.Asleep, Sleeps: 3})
+	echo.Observe(wake.Stats{State: wake.Sleeping, Sleeps: 1, Held: 2})
+	raw, err := os.ReadFile(filepath.Join(a.cfg.State, transitionsFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]transitionStats
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("%v: %s", err, raw)
+	}
+	want := map[string]transitionStats{
+		"echo":  {State: "SLEEPING", Sleeps: 1, Held: 2},
+		"other": {State: "ASLEEP", Sleeps: 3},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("transitions.json = %s, want %v", raw, want)
+	}
+	if _, err := os.Stat(filepath.Join(a.cfg.State, transitionsFile+".tmp")); !os.IsNotExist(err) {
+		t.Fatalf("the temporary file stayed: %v", err)
+	}
+}
+
+func TestFollowTakesDrainAndIdleOfTheAssignment(t *testing.T) {
+	now := time.Now()
+	in := &instance{idle: wake.NewIdle(time.Minute, now)}
+	follow(in, &andenv1.ServiceSpec{DrainingSeconds: proto.Uint32(2), IdleSeconds: proto.Uint32(0)}, now)
+	if in.drain != 2*time.Second || in.idle != nil {
+		t.Fatalf("old instance of a deploy: drain %v idle %v", in.drain, in.idle)
+	}
+	follow(in, &andenv1.ServiceSpec{IdleSeconds: proto.Uint32(60)}, now)
+	if in.drain != 0 || in.idle == nil {
+		t.Fatalf("after a failed deploy: drain %v idle %v", in.drain, in.idle)
+	}
+}
+
+// A sleep without snapshot leaves only the directory with the upper layer and the
+// work directory, and the empty cgroup that C7 reads. That the veth and the mounts
+// go needs a datacenter, and C27 is what proves it.
+func TestHaltLeavesOnlyWhatIsDeclared(t *testing.T) {
+	state, cgroupRoot := t.TempDir(), t.TempDir()
+	a := &Agent{cfg: Config{State: state, Runtime: filepath.Join(t.TempDir(), "absent")},
+		intents: map[string]*intent{}, beatNow: make(chan struct{}, 1), instances: map[string]*instance{}}
+	in := &instance{id: "echo-1", service: "echo", generation: 1, routeRequested: routeRelaunch,
+		paths: instancePaths(state, cgroupRoot, "echo", 1, "echo-1"),
+		state: andenv1.InstanceState_INSTANCE_STATE_RUNNING}
+	p := in.paths
+	for _, d := range []string{p.upper, p.work, p.merged, p.bundle, p.cgroup} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	files := map[string]string{
+		filepath.Join(p.upper, "written"):        "kept",
+		filepath.Join(p.bundle, "config.json"):   "{}",
+		p.netNS:                                  "",
+		p.utsNS:                                  "",
+		p.ipcNS:                                  "",
+		filepath.Join(p.cgroup, "cgroup.events"): "populated 0\n",
+		filepath.Join(p.cgroup, "memory.current"): "8192\n",
+		filepath.Join(p.cgroup, "memory.reclaim"): "",
+	}
+	for path, content := range files {
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := (&instanceControl{a: a, in: in}).Halt(); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, gone := range []string{p.bundle, p.netNS, p.utsNS, p.ipcNS, p.merged, p.snapshot} {
+		if _, err := os.Lstat(gone); !os.IsNotExist(err) {
+			t.Errorf("%s survived the sleep: %v", gone, err)
+		}
+	}
+	entries, err := os.ReadDir(p.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var left []string
+	for _, e := range entries {
+		left = append(left, e.Name())
+	}
+	if !slices.Equal(left, []string{"upper", "work"}) {
+		t.Errorf("instance directory holds %q, want upper and work", left)
+	}
+	if raw, err := os.ReadFile(filepath.Join(p.upper, "written")); err != nil || string(raw) != "kept" {
+		t.Errorf("the upper layer must survive: %q, %v", raw, err)
+	}
+	if raw, err := os.ReadFile(filepath.Join(p.cgroup, "memory.reclaim")); err != nil || string(raw) != "8192" {
+		t.Errorf("memory.reclaim = %q, %v", raw, err)
+	}
+	if in.state != andenv1.InstanceState_INSTANCE_STATE_STOPPED || in.pid != 0 || in.hasSnapshot {
+		t.Errorf("after the sleep: state %v, pid %d, snapshot %v", in.state, in.pid, in.hasSnapshot)
+	}
+	if it := a.intents["echo-1"]; it == nil || it.awake {
+		t.Errorf("the sleep must be declared to the control plane: %+v", it)
+	}
+}

@@ -1,0 +1,8 @@
+# D27: the paths C29 counts with cloc, one `<class> <path>` per line, the path relative to the repository root.
+# A path of one class inside a path of the other leaves the outer count: internal/sim is support, not product.
+# *_test.go is counted in no class, and gen/ is declared in none.
+product cmd
+product internal
+support acceptance
+support verify
+support internal/sim
