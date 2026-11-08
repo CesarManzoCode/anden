@@ -2,7 +2,7 @@
 
 ## 1.0.0 (2026-11-07)
 
-Primera versión completa: lo que se construyó de K1 a K5 y se midió en esta máquina. Las cifras están en el `README.md`, el porqué en `vault/DESIGN.md` y los límites en `LIMITATIONS.md`.
+Primera versión completa: lo que se construyó de K1 a K6 y se midió en esta máquina. Las cifras están en el `README.md`, el porqué en `vault/DESIGN.md` y los límites en `LIMITATIONS.md`.
 
 ### Qué hace
 
@@ -15,11 +15,15 @@ Primera versión completa: lo que se construyó de K1 a K5 y se midió en esta m
 
 ### Medido
 
-- El despertar por relanzamiento en caché tibia da p99 de 68.4 ms en la última corrida, bajo 1 s en esta máquina. Con la máquina cargada, una corrida dio un máximo de 1237.4 ms. La caché fría no se midió: falta `sudo -n`.
-- Restaurar con CRIU despierta con p50 de 32.3 ms, frente a 55.3 ms al relanzar.
-- Al matar un nodo, sus servicios vuelven en otro con 5.30 s sin servicio en la última corrida, frente al límite de 10 s.
-- Con 1000 servicios dormidos, cada uno ocupa 136.5 KiB en promedio y el p99 de despertar es 243.6 ms.
+Cifras de la verificación del cierre de K6 (8 nov 2026, árbol `a08991754336`).
+
+- El despertar por relanzamiento en caché tibia da p99 de 250.8 ms y máximo de 252.2 ms, en 300 muestras: bajo 1 s en esta máquina. Con la máquina cargada, una corrida anterior dio un máximo de 1237.4 ms. La caché fría no se midió: falta `sudo -n`.
+- Restaurar con CRIU despierta con p50 de 35.3 ms, frente a 54.6 ms al relanzar.
+- Al matar un nodo, sus servicios vuelven en otro con 4.70 s sin servicio, frente al límite de 10 s.
+- Con 1000 servicios dormidos, cada uno ocupa 112.4 KiB en promedio y el p99 de despertar es 433.0 ms.
 - El scheduler coloca 289 servicios donde la fuerza bruta coloca 362.
+
+## K6: diseño y publicación de resultados (2026-11-07)
 
 ### Agregado
 
@@ -31,6 +35,13 @@ Primera versión completa: lo que se construyó de K1 a K5 y se midió en esta m
 
 - El `client_addr` de un despertar podía traer un puerto que el cliente no usó: el `redirect` a `:15000` reescribe el puerto de origen si la respuesta choca con otra entrada de conntrack, como el mismo puerto hacia otro servicio dormido menos de 120 s antes. C12 falló así una vez, con 99 de 100 despertares `restore` emparejados. Ahora el agente toma el origen de la tupla original en `/proc/net/nf_conntrack`.
 - La fila de C15 del `README.md` ya no trae la fracción 0.798, calculada a mano y ausente de la evidencia.
+
+### Medido
+
+- `vault/DESIGN.md` tiene sus cuatro secciones (C30); nadie de fuera del proyecto lo revisó.
+- La suma de las siete fases coincide con el cliente externo en 200 de 200 despertares, 100 por ruta (C12).
+- Desde un clon limpio y sin sudo, `make check && make accept` sale con 0 en 2455.9 s, con C1 a C30 pasando, salvo C8 en caché fría, que sale con 77, y C28, que no se corre a sí mismo (C28).
+- El código de apoyo suma 5132 líneas frente a 9398 de producto, una razón de 0.546 (C29).
 
 ## K5: observabilidad, densidad y construcción (2026-11-07)
 
